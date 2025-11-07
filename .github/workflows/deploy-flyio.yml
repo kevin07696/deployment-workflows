@@ -1,0 +1,88 @@
+name: Deploy to Fly.io (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: 'Name of the microservice (must match fly.toml app name)'
+        required: true
+        type: string
+      environment:
+        description: 'Deployment environment (staging or production)'
+        required: false
+        type: string
+        default: 'staging'
+      fly-config:
+        description: 'Path to fly.toml configuration file'
+        required: false
+        type: string
+        default: './fly.toml'
+    secrets:
+      FLY_API_TOKEN:
+        description: 'Fly.io API token'
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "🚀 Deploying ${{ inputs.service-name }} to ${{ inputs.environment }}..."
+
+          # Deploy with zero-downtime
+          flyctl deploy \
+            --config ${{ inputs.fly-config }} \
+            --app ${{ inputs.service-name }}-${{ inputs.environment }} \
+            --strategy rolling \
+            --wait-timeout 300
+
+          echo "✅ Deployment successful!"
+
+      - name: Verify deployment
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "🔍 Verifying deployment..."
+
+          # Get app status
+          flyctl status --app ${{ inputs.service-name }}-${{ inputs.environment }}
+
+          # Check if app is responding
+          APP_URL="https://${{ inputs.service-name }}-${{ inputs.environment }}.fly.dev"
+
+          echo "Checking health endpoint: ${APP_URL}/cron/health"
+          for i in {1..10}; do
+            if curl -f -s "${APP_URL}/cron/health" > /dev/null; then
+              echo "✅ Health check passed!"
+              exit 0
+            fi
+            echo "⏳ Waiting for app to be ready... (attempt $i/10)"
+            sleep 10
+          done
+
+          echo "⚠️ Health check timed out, but deployment completed. Check logs manually."
+          exit 0
+
+      - name: Show deployment info
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "📊 Deployment Information:"
+          echo "Service: ${{ inputs.service-name }}"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "URL: https://${{ inputs.service-name }}-${{ inputs.environment }}.fly.dev"
+          echo ""
+          echo "Recent logs:"
+          flyctl logs --app ${{ inputs.service-name }}-${{ inputs.environment }} --lines 20

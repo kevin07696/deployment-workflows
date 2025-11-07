@@ -1,0 +1,62 @@
+name: Go Test (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: '1.21'
+      working-directory:
+        description: 'Working directory'
+        required: false
+        type: string
+        default: '.'
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+
+      - name: Download dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: go mod download
+
+      - name: Run tests
+        working-directory: ${{ inputs.working-directory }}
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Generate coverage report
+        working-directory: ${{ inputs.working-directory }}
+        run: go tool cover -func=coverage.out
+
+      - name: Run go vet
+        working-directory: ${{ inputs.working-directory }}
+        run: go vet ./...
+
+      - name: Check formatting
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -n "$(gofmt -s -l .)" ]; then
+            echo "Go code is not formatted:"
+            gofmt -s -d .
+            exit 1
+          fi
+
+      - name: Upload coverage to artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ inputs.working-directory }}/coverage.out
+          retention-days: 7
