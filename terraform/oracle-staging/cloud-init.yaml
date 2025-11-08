@@ -55,14 +55,13 @@ runcmd:
     GRPC_PORT=8080
     HTTP_PORT=8081
 
-    # EPX Payment Gateway (Sandbox)
+    # EPX Payment Gateway Configuration
+    # Note: Merchant credentials (CUST_NBR, MERCH_NBR, DBA_NBR, TERMINAL_NBR) are
+    # stored per-agent in the database following multi-tenant architecture.
+    # Only the MAC secret for the test merchant is provided here for staging.
     EPX_SERVER_POST_URL=https://secure.epxuap.com
     EPX_TIMEOUT=30
-    EPX_CUST_NBR=9001
-    EPX_MERCH_NBR=900300
-    EPX_DBA_NBR=2
-    EPX_TERMINAL_NBR=77
-    EPX_MAC=${epx_mac}
+    EPX_TEST_AGENT_MAC=${epx_mac}
 
     # North Merchant Reporting API
     NORTH_MERCHANT_REPORTING_URL=https://api.north.com
