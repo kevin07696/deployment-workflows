@@ -14,7 +14,8 @@ on:
       terraform-directory:
         required: false
         type: string
-        default: 'terraform'
+        default: 'terraform/oracle-staging'
+        description: 'Terraform directory in deployment-workflows repo'
     secrets:
       OCI_USER_OCID:
         required: true

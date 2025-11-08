@@ -1,0 +1,23 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!terraform.tfvars.example
+
+# Sensitive outputs
+oracle-wallet.zip
+oracle-wallet/
+ssh-keys/
+*.pem
+*.key
+
+# Logs
+*.log
+crash.log
+
+# Backup files
+*.backup
+*.bak
