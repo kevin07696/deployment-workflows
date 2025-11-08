@@ -1,0 +1,146 @@
+name: Terraform Infrastructure Provisioning
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: 'Environment to provision (staging or production)'
+      terraform-directory:
+        required: false
+        type: string
+        default: 'terraform'
+        description: 'Directory containing Terraform files'
+      auto-approve:
+        required: false
+        type: boolean
+        default: false
+        description: 'Auto-approve terraform apply'
+    secrets:
+      OCI_USER_OCID:
+        required: true
+      OCI_TENANCY_OCID:
+        required: true
+      OCI_COMPARTMENT_OCID:
+        required: true
+      OCI_REGION:
+        required: true
+      OCI_FINGERPRINT:
+        required: true
+      OCI_PRIVATE_KEY:
+        required: true
+      ORACLE_DB_ADMIN_PASSWORD:
+        required: true
+      ORACLE_DB_PASSWORD:
+        required: true
+      EPX_MAC_STAGING:
+        required: true
+      CRON_SECRET_STAGING:
+        required: true
+      SSH_PUBLIC_KEY:
+        required: false
+
+jobs:
+  terraform:
+    name: Provision Infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.terraform-directory }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Create terraform.tfvars
+        run: |
+          cat > terraform.tfvars <<EOF
+          # OCI Authentication
+          user_ocid         = "${{ secrets.OCI_USER_OCID }}"
+          tenancy_ocid      = "${{ secrets.OCI_TENANCY_OCID }}"
+          compartment_ocid  = "${{ secrets.OCI_COMPARTMENT_OCID }}"
+          region            = "${{ secrets.OCI_REGION }}"
+          fingerprint       = "${{ secrets.OCI_FINGERPRINT }}"
+          private_key       = <<-EOK
+          ${{ secrets.OCI_PRIVATE_KEY }}
+          EOK
+
+          # Environment
+          environment = "${{ inputs.environment }}"
+
+          # Database Configuration
+          db_admin_password = "${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}"
+          db_app_password   = "${{ secrets.ORACLE_DB_PASSWORD }}"
+
+          # Application Secrets
+          epx_mac      = "${{ secrets.EPX_MAC_STAGING }}"
+          cron_secret  = "${{ secrets.CRON_SECRET_STAGING }}"
+
+          # SSH Key (optional)
+          ssh_public_key = "${{ secrets.SSH_PUBLIC_KEY }}"
+          EOF
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ inputs.terraform-directory }}/plan.txt
+
+      - name: Terraform Apply
+        if: inputs.auto-approve == true || github.event_name == 'push'
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Output
+        id: output
+        if: success()
+        run: |
+          echo "Terraform outputs:"
+          terraform output -json > outputs.json
+
+          # Extract key outputs
+          ORACLE_HOST=$(terraform output -raw oracle_cloud_host)
+          echo "oracle_host=${ORACLE_HOST}" >> $GITHUB_OUTPUT
+
+          echo "✅ Infrastructure provisioned successfully"
+          echo "📍 Oracle Cloud Host: ${ORACLE_HOST}"
+
+      - name: Upload Outputs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs
+          path: ${{ inputs.terraform-directory }}/outputs.json
+
+      - name: Display Next Steps
+        if: success()
+        run: |
+          echo "=========================================="
+          echo "✅ Infrastructure Provisioning Complete"
+          echo "=========================================="
+          echo ""
+          echo "Next steps:"
+          echo "1. Add ORACLE_CLOUD_HOST to GitHub secrets"
+          echo "2. Add ORACLE_CLOUD_SSH_KEY to GitHub secrets"
+          echo "3. Deploy application with updated secrets"
+          echo ""
+          echo "See terraform outputs for connection details"
+          echo "=========================================="

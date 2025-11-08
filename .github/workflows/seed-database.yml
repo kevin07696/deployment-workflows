@@ -1,0 +1,119 @@
+name: Seed Database
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: 'Environment to seed (staging or production)'
+      seed-directory:
+        required: false
+        type: string
+        default: 'db/seeds'
+        description: 'Directory containing seed files'
+    secrets:
+      DB_HOST:
+        required: true
+      DB_PORT:
+        required: false
+      DB_USER:
+        required: true
+      DB_PASSWORD:
+        required: true
+      DB_NAME:
+        required: true
+      DB_SSL_MODE:
+        required: false
+
+jobs:
+  seed:
+    name: Seed Database
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL Client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Verify Seed Files
+        run: |
+          echo "📋 Checking seed files in ${{ inputs.seed-directory }}/${{ inputs.environment }}/"
+
+          if [ ! -d "${{ inputs.seed-directory }}/${{ inputs.environment }}" ]; then
+            echo "❌ Seed directory not found: ${{ inputs.seed-directory }}/${{ inputs.environment }}"
+            exit 1
+          fi
+
+          SEED_FILES=$(find ${{ inputs.seed-directory }}/${{ inputs.environment }} -name "*.sql" | sort)
+
+          if [ -z "$SEED_FILES" ]; then
+            echo "⚠️ No seed files found in ${{ inputs.seed-directory }}/${{ inputs.environment }}"
+            exit 0
+          fi
+
+          echo "Found seed files:"
+          echo "$SEED_FILES"
+
+      - name: Run Seed Files
+        env:
+          PGHOST: ${{ secrets.DB_HOST }}
+          PGPORT: ${{ secrets.DB_PORT || '5432' }}
+          PGUSER: ${{ secrets.DB_USER }}
+          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
+          PGDATABASE: ${{ secrets.DB_NAME }}
+          PGSSLMODE: ${{ secrets.DB_SSL_MODE || 'require' }}
+        run: |
+          echo "🌱 Seeding ${{ inputs.environment }} database..."
+
+          # Build connection string
+          CONN_STRING="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=${PGSSLMODE}"
+
+          # Execute each seed file in order
+          for seed_file in $(find ${{ inputs.seed-directory }}/${{ inputs.environment }} -name "*.sql" | sort); do
+            echo "📄 Executing: $seed_file"
+            psql "$CONN_STRING" -f "$seed_file"
+
+            if [ $? -eq 0 ]; then
+              echo "  ✅ Success"
+            else
+              echo "  ❌ Failed to execute $seed_file"
+              exit 1
+            fi
+          done
+
+          echo "✅ Database seeding completed successfully"
+
+      - name: Verify Seeded Data
+        env:
+          PGHOST: ${{ secrets.DB_HOST }}
+          PGPORT: ${{ secrets.DB_PORT || '5432' }}
+          PGUSER: ${{ secrets.DB_USER }}
+          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
+          PGDATABASE: ${{ secrets.DB_NAME }}
+          PGSSLMODE: ${{ secrets.DB_SSL_MODE || 'require' }}
+        run: |
+          echo "🔍 Verifying seeded data..."
+
+          CONN_STRING="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=${PGSSLMODE}"
+
+          # Count records in key tables
+          echo "Record counts:"
+          psql "$CONN_STRING" -c "SELECT 'customers' as table_name, COUNT(*) as count FROM customers UNION ALL SELECT 'payment_methods', COUNT(*) FROM payment_methods UNION ALL SELECT 'subscriptions', COUNT(*) FROM subscriptions;"
+
+          echo "✅ Data verification complete"
+
+      - name: Generate Seed Summary
+        if: always()
+        run: |
+          echo "## Database Seeding Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Database:** ${{ secrets.DB_HOST }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Seed files executed from: \`${{ inputs.seed-directory }}/${{ inputs.environment }}/\`" >> $GITHUB_STEP_SUMMARY

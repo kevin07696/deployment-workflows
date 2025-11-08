@@ -1,0 +1,148 @@
+name: Deploy to Oracle Cloud Staging
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+        description: 'Name of the service to deploy'
+      image-tag:
+        required: false
+        type: string
+        default: 'latest'
+        description: 'Docker image tag to deploy'
+    secrets:
+      ORACLE_CLOUD_HOST:
+        required: true
+      ORACLE_CLOUD_SSH_KEY:
+        required: true
+      OCIR_REGION:
+        required: true
+      OCIR_TENANCY_NAMESPACE:
+        required: true
+      OCIR_USERNAME:
+        required: true
+      OCIR_AUTH_TOKEN:
+        required: true
+      ORACLE_DB_USER:
+        required: true
+      ORACLE_DB_PASSWORD:
+        required: true
+      ORACLE_DB_CONNECTION_STRING:
+        required: true
+
+jobs:
+  migrate:
+    name: Run Database Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Migrations via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.ORACLE_CLOUD_HOST }}
+          username: ubuntu
+          key: ${{ secrets.ORACLE_CLOUD_SSH_KEY }}
+          script: |
+            echo "🔄 Running database migrations on Oracle Autonomous Database..."
+
+            # Ensure migrations directory exists
+            mkdir -p ~/migrations
+
+            # Clone or update repository to get latest migrations
+            if [ ! -d ~/payment-service-repo ]; then
+              git clone https://github.com/${{ github.repository }}.git ~/payment-service-repo
+            else
+              cd ~/payment-service-repo && git pull origin ${{ github.ref_name }}
+            fi
+
+            # Copy migrations to local directory
+            cp -r ~/payment-service-repo/migrations/* ~/migrations/ 2>/dev/null || echo "No migrations to copy"
+
+            # Install goose if not present
+            if ! command -v goose &> /dev/null; then
+              echo "📦 Installing goose migration tool..."
+              wget -q https://github.com/pressly/goose/releases/download/v3.15.0/goose_linux_arm64
+              chmod +x goose_linux_arm64
+              sudo mv goose_linux_arm64 /usr/local/bin/goose
+            fi
+
+            # Build DATABASE_URL for Oracle Autonomous Database
+            DATABASE_URL="postgresql://${{ secrets.ORACLE_DB_USER }}:${{ secrets.ORACLE_DB_PASSWORD }}@${{ secrets.ORACLE_DB_CONNECTION_STRING }}/paymentdb?sslmode=require"
+
+            # Run migrations
+            cd ~/migrations
+            echo "Running goose migrations..."
+            goose -dir . postgres "$DATABASE_URL" up
+
+            echo "✅ Migrations completed successfully"
+
+  deploy:
+    name: Deploy Application
+    needs: migrate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Oracle Container Registry (OCIR)
+        run: |
+          echo "${{ secrets.OCIR_AUTH_TOKEN }}" | docker login ${{ secrets.OCIR_REGION }}.ocir.io \
+            -u "${{ secrets.OCIR_USERNAME }}" \
+            --password-stdin
+
+      - name: Build and Push Docker Image to OCIR
+        run: |
+          IMAGE_TAG="${{ secrets.OCIR_REGION }}.ocir.io/${{ secrets.OCIR_TENANCY_NAMESPACE }}/${{ inputs.service-name }}:${{ github.sha }}"
+          IMAGE_LATEST="${{ secrets.OCIR_REGION }}.ocir.io/${{ secrets.OCIR_TENANCY_NAMESPACE }}/${{ inputs.service-name }}:latest"
+
+          echo "🏗️  Building Docker image..."
+          docker build -t ${IMAGE_TAG} -t ${IMAGE_LATEST} .
+
+          echo "📤 Pushing image to Oracle Container Registry..."
+          docker push ${IMAGE_TAG}
+          docker push ${IMAGE_LATEST}
+
+          echo "✅ Image pushed successfully"
+
+      - name: Deploy to Oracle Compute Instance
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.ORACLE_CLOUD_HOST }}
+          username: ubuntu
+          key: ${{ secrets.ORACLE_CLOUD_SSH_KEY }}
+          script: |
+            echo "🔐 Logging into Oracle Container Registry..."
+            echo "${{ secrets.OCIR_AUTH_TOKEN }}" | docker login ${{ secrets.OCIR_REGION }}.ocir.io \
+              -u "${{ secrets.OCIR_USERNAME }}" \
+              --password-stdin
+
+            echo "📥 Pulling latest Docker image..."
+            docker pull ${{ secrets.OCIR_REGION }}.ocir.io/${{ secrets.OCIR_TENANCY_NAMESPACE }}/${{ inputs.service-name }}:${{ inputs.image-tag }}
+
+            echo "🛑 Stopping existing container..."
+            docker-compose -f ~/payment-service/docker-compose.yml down || true
+
+            echo "🚀 Starting new container..."
+            cd ~/payment-service
+            docker-compose up -d
+
+            echo "⏳ Waiting for health check..."
+            sleep 10
+
+            echo "🏥 Checking health..."
+            curl -f http://localhost:8081/cron/health || exit 1
+
+            echo "✅ Deployment successful!"
+
+      - name: Verify Deployment
+        run: |
+          echo "🔍 Verifying deployment..."
+          sleep 5
+          curl -f http://${{ secrets.ORACLE_CLOUD_HOST }}:8081/cron/health
+
+          echo "✅ Staging deployment verified"
+          echo "📍 Staging URL: http://${{ secrets.ORACLE_CLOUD_HOST }}:8081"

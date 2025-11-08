@@ -1,0 +1,144 @@
+name: Run Integration Tests
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: 'Environment to test (staging or production)'
+      test-timeout:
+        required: false
+        type: number
+        default: 300
+        description: 'Test timeout in seconds'
+    secrets:
+      TEST_HOST:
+        required: true
+        description: 'Host to run tests against'
+      CRON_SECRET:
+        required: true
+        description: 'Cron secret for authenticated endpoints'
+      EPX_CUST_NBR:
+        required: false
+      EPX_MERCH_NBR:
+        required: false
+
+jobs:
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Health Check
+        run: |
+          echo "🏥 Running health check..."
+          curl -f http://${{ secrets.TEST_HOST }}:8081/cron/health || exit 1
+          echo "✅ Health check passed"
+
+      - name: Metrics Endpoint
+        run: |
+          echo "📊 Checking metrics endpoint..."
+          curl -f http://${{ secrets.TEST_HOST }}:9091/metrics || echo "⚠️ Metrics endpoint not available (optional)"
+
+  integration-tests:
+    name: Integration Tests
+    needs: smoke-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.test-timeout / 60 }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run Integration Tests
+        env:
+          TEST_HTTP_HOST: ${{ secrets.TEST_HOST }}:8081
+          TEST_GRPC_HOST: ${{ secrets.TEST_HOST }}:8080
+          TEST_CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TEST_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          echo "🧪 Running integration tests against ${{ inputs.environment }}..."
+
+          # Run integration tests
+          go test -v -timeout ${{ inputs.test-timeout }}s ./test/integration/... \
+            -coverprofile=coverage.out \
+            -covermode=atomic
+
+          echo "✅ Integration tests passed"
+
+      - name: Upload Coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-coverage
+          path: coverage.out
+
+      - name: Generate Coverage Report
+        run: |
+          go tool cover -func=coverage.out > coverage-report.txt
+          cat coverage-report.txt
+
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "📊 Total Coverage: $COVERAGE"
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-report.txt
+
+  epx-tests:
+    name: EPX Integration Tests
+    needs: smoke-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: inputs.environment == 'staging'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run EPX Tests
+        env:
+          TEST_HTTP_HOST: ${{ secrets.TEST_HOST }}:8081
+          TEST_GRPC_HOST: ${{ secrets.TEST_HOST }}:8080
+          TEST_CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TEST_EPX_CUST_NBR: ${{ secrets.EPX_CUST_NBR }}
+          TEST_EPX_MERCH_NBR: ${{ secrets.EPX_MERCH_NBR }}
+        run: |
+          echo "🧪 Running EPX integration tests..."
+
+          # Run EPX-specific tests
+          go test -v -timeout 300s ./test/integration/epx_integration_test.go
+
+          echo "✅ EPX tests passed"
+
+  test-summary:
+    name: Test Summary
+    needs: [smoke-tests, integration-tests, epx-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## Integration Test Results - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Smoke Tests | ${{ needs.smoke-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| EPX Tests | ${{ needs.epx-tests.result == 'success' && '✅ Passed' || needs.epx-tests.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Host:** ${{ secrets.TEST_HOST }}" >> $GITHUB_STEP_SUMMARY
