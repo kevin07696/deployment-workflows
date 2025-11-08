@@ -1,0 +1,185 @@
+name: Infrastructure Lifecycle Management
+
+on:
+  workflow_call:
+    inputs:
+      action:
+        required: true
+        type: string
+        description: 'Action to perform: create, destroy, or check'
+      environment:
+        required: true
+        type: string
+        description: 'Environment (staging or production)'
+      terraform-directory:
+        required: false
+        type: string
+        default: 'terraform'
+    secrets:
+      OCI_USER_OCID:
+        required: true
+      OCI_TENANCY_OCID:
+        required: true
+      OCI_COMPARTMENT_OCID:
+        required: true
+      OCI_REGION:
+        required: true
+      OCI_FINGERPRINT:
+        required: true
+      OCI_PRIVATE_KEY:
+        required: true
+      ORACLE_DB_ADMIN_PASSWORD:
+        required: true
+      ORACLE_DB_PASSWORD:
+        required: true
+      EPX_MAC_STAGING:
+        required: true
+      CRON_SECRET_STAGING:
+        required: true
+      SSH_PUBLIC_KEY:
+        required: false
+    outputs:
+      infrastructure_exists:
+        description: 'Whether infrastructure exists'
+        value: ${{ jobs.manage.outputs.infrastructure_exists }}
+      oracle_cloud_host:
+        description: 'Oracle Cloud host IP'
+        value: ${{ jobs.manage.outputs.oracle_cloud_host }}
+
+jobs:
+  manage:
+    name: ${{ inputs.action }} Infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      infrastructure_exists: ${{ steps.check.outputs.exists }}
+      oracle_cloud_host: ${{ steps.output.outputs.host }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+          terraform_wrapper: false
+
+      - name: Configure Oracle Cloud credentials
+        run: |
+          mkdir -p ~/.oci
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=~/.oci/oci_api_key.pem
+          EOF
+
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+      - name: Create terraform.tfvars
+        working-directory: ${{ inputs.terraform-directory }}
+        run: |
+          cat > terraform.tfvars <<'EOF'
+          tenancy_ocid      = "${{ secrets.OCI_TENANCY_OCID }}"
+          user_ocid         = "${{ secrets.OCI_USER_OCID }}"
+          fingerprint       = "${{ secrets.OCI_FINGERPRINT }}"
+          private_key       = <<-EOT
+          ${{ secrets.OCI_PRIVATE_KEY }}
+          EOT
+          region            = "${{ secrets.OCI_REGION }}"
+          compartment_ocid  = "${{ secrets.OCI_COMPARTMENT_OCID }}"
+          db_admin_password = "${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}"
+          db_app_password   = "${{ secrets.ORACLE_DB_PASSWORD }}"
+          epx_mac           = "${{ secrets.EPX_MAC_STAGING }}"
+          cron_secret       = "${{ secrets.CRON_SECRET_STAGING }}"
+          ssh_public_key    = "${{ secrets.SSH_PUBLIC_KEY }}"
+          environment       = "${{ inputs.environment }}"
+          EOF
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.terraform-directory }}
+        run: terraform init
+
+      - name: Check Infrastructure State
+        id: check
+        working-directory: ${{ inputs.terraform-directory }}
+        run: |
+          # Check if infrastructure exists
+          if terraform show &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Infrastructure exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ Infrastructure does not exist"
+          fi
+
+      - name: Terraform Plan
+        if: inputs.action == 'create' || inputs.action == 'check'
+        working-directory: ${{ inputs.terraform-directory }}
+        run: |
+          terraform plan -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Upload Plan
+        if: inputs.action == 'create' || inputs.action == 'check'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ inputs.environment }}
+          path: ${{ inputs.terraform-directory }}/plan.txt
+
+      - name: Terraform Apply
+        if: inputs.action == 'create'
+        working-directory: ${{ inputs.terraform-directory }}
+        run: |
+          echo "🚀 Creating ${{ inputs.environment }} infrastructure..."
+          terraform apply -auto-approve tfplan
+          echo "✅ Infrastructure created successfully"
+
+      - name: Terraform Destroy
+        if: inputs.action == 'destroy'
+        working-directory: ${{ inputs.terraform-directory }}
+        run: |
+          echo "🗑️ Destroying ${{ inputs.environment }} infrastructure..."
+          terraform destroy -auto-approve
+          echo "✅ Infrastructure destroyed successfully"
+
+      - name: Export Outputs
+        id: output
+        if: inputs.action == 'create' && success()
+        working-directory: ${{ inputs.terraform-directory }}
+        run: |
+          echo "Extracting Terraform outputs..."
+
+          ORACLE_HOST=$(terraform output -raw oracle_cloud_host 2>/dev/null || echo "")
+          echo "host=${ORACLE_HOST}" >> $GITHUB_OUTPUT
+
+          echo "## Terraform Outputs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Oracle Cloud Host:** ${ORACLE_HOST}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Required GitHub Secrets" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          terraform output -raw github_secrets >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Save Wallet
+        if: inputs.action == 'create' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-wallet-${{ inputs.environment }}
+          path: ${{ inputs.terraform-directory }}/oracle-wallet.zip
+          retention-days: 7
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## Infrastructure ${{ inputs.action }} - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u)" >> $GITHUB_STEP_SUMMARY
