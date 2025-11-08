@@ -37,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
+      primary-tag: ${{ steps.extract-tag.outputs.tag }}
 
     steps:
       - name: Checkout code
@@ -59,6 +60,14 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Extract primary tag
+        id: extract-tag
+        run: |
+          # Extract first tag from metadata output
+          PRIMARY_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          echo "tag=$PRIMARY_TAG" >> $GITHUB_OUTPUT
+          echo "Using primary tag: $PRIMARY_TAG"
+
       - name: Build Docker image
         uses: docker/build-push-action@v5
         with:
@@ -77,13 +86,14 @@ jobs:
 
       - name: Test Docker image
         run: |
-          docker run --rm ${{ inputs.service-name }}:latest --version || echo "No version command available"
+          echo "Testing image: ${{ steps.extract-tag.outputs.tag }}"
+          docker run --rm ${{ steps.extract-tag.outputs.tag }} --version || echo "No version command available"
           docker images | grep ${{ inputs.service-name }}
 
       - name: Scan for vulnerabilities
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ inputs.service-name }}:latest
+          image-ref: ${{ steps.extract-tag.outputs.tag }}
           format: 'table'
           exit-code: '0'
           ignore-unfixed: true
