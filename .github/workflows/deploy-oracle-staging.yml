@@ -65,8 +65,12 @@ jobs:
               cd ~/payment-service-repo && git pull origin ${{ github.ref_name }}
             fi
 
-            # Copy migrations to local directory
+            # Copy migrations and seeds to local directories
             cp -r ~/payment-service-repo/internal/db/migrations/* ~/migrations/ 2>/dev/null || echo "No migrations to copy"
+
+            # Copy seed data for staging
+            mkdir -p ~/seeds
+            cp -r ~/payment-service-repo/internal/db/seeds/staging/* ~/seeds/ 2>/dev/null || echo "No seeds to copy"
 
             # Install goose if not present
             if ! command -v goose &> /dev/null; then
@@ -85,6 +89,16 @@ jobs:
             goose -dir . postgres "$DATABASE_URL" up
 
             echo "✅ Migrations completed successfully"
+
+            # Run seed data for staging environment
+            echo "🌱 Seeding staging database..."
+            cd ~/seeds
+            for seed_file in $(ls *.sql | sort); do
+              echo "  - Applying seed: $seed_file"
+              psql "$DATABASE_URL" -f "$seed_file"
+            done
+
+            echo "✅ Database seeding completed successfully"
 
   deploy:
     name: Deploy Application
