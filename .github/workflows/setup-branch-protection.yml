@@ -1,0 +1,117 @@
+name: Setup Branch Protection
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: 'Repository in format owner/repo'
+        required: true
+        type: string
+      main-branch:
+        description: 'Main/production branch name'
+        required: false
+        type: string
+        default: 'main'
+      develop-branch:
+        description: 'Development branch name'
+        required: false
+        type: string
+        default: 'develop'
+      required-reviewers:
+        description: 'Number of required code reviewers'
+        required: false
+        type: number
+        default: 1
+      enforce-admins:
+        description: 'Enforce protection rules for admins'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  setup-protection:
+    name: Configure Branch Protection
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate inputs
+        run: |
+          echo "🔧 Configuring branch protection for ${{ inputs.repository }}"
+          echo "Main branch: ${{ inputs.main-branch }}"
+          echo "Develop branch: ${{ inputs.develop-branch }}"
+          echo "Required reviewers: ${{ inputs.required-reviewers }}"
+          echo "Enforce for admins: ${{ inputs.enforce-admins }}"
+
+      - name: Create protection configuration
+        run: |
+          cat > /tmp/branch-protection.json <<EOF
+          {
+            "required_status_checks": {
+              "strict": true,
+              "contexts": [
+                "Run Tests / Test",
+                "Build Docker Image / build",
+                "Integration Tests (Post-Deployment Gate)"
+              ]
+            },
+            "enforce_admins": ${{ inputs.enforce-admins }},
+            "required_pull_request_reviews": {
+              "required_approving_review_count": ${{ inputs.required-reviewers }},
+              "dismiss_stale_reviews": true,
+              "require_code_owner_reviews": false
+            },
+            "restrictions": null,
+            "allow_force_pushes": false,
+            "allow_deletions": false,
+            "required_linear_history": false
+          }
+          EOF
+
+          echo "📄 Protection configuration:"
+          cat /tmp/branch-protection.json | jq .
+
+      - name: Apply protection to main branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔒 Applying protection to ${{ inputs.main-branch }} branch..."
+
+          gh api repos/${{ inputs.repository }}/branches/${{ inputs.main-branch }}/protection \
+            --method PUT \
+            --input /tmp/branch-protection.json
+
+          echo "✅ Branch protection applied successfully!"
+
+      - name: Verify protection
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔍 Verifying protection rules..."
+
+          gh api repos/${{ inputs.repository }}/branches/${{ inputs.main-branch }}/protection \
+            --jq '{
+              required_checks: .required_status_checks.contexts,
+              required_reviewers: .required_pull_request_reviews.required_approving_review_count,
+              enforce_admins: .enforce_admins.enabled,
+              allow_force_pushes: .allow_force_pushes.enabled
+            }'
+
+      - name: Summary
+        run: |
+          echo "## Branch Protection Configured ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ inputs.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Protected Branch:** ${{ inputs.main-branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Required Reviewers:** ${{ inputs.required-reviewers }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Enforce for Admins:** ${{ inputs.enforce-admins }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Required Status Checks" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Run Tests / Test" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Build Docker Image / build" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Integration Tests (Post-Deployment Gate)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Protection Rules" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Require branch to be up-to-date before merge" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Dismiss stale pull request reviews" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Prevent force pushes" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Prevent branch deletion" >> $GITHUB_STEP_SUMMARY
