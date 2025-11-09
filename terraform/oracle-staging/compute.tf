@@ -63,9 +63,15 @@ resource "oci_core_instance" "payment_instance" {
   }
 }
 
-# Get public IP
+# Get VNIC attachments to find primary VNIC
+data "oci_core_vnic_attachments" "payment_instance_vnics" {
+  compartment_id      = var.compartment_ocid
+  instance_id         = oci_core_instance.payment_instance.id
+}
+
+# Get public IP from primary VNIC
 data "oci_core_vnic" "payment_instance_vnic" {
-  vnic_id = oci_core_instance.payment_instance.create_vnic_details[0].vnic_id
+  vnic_id = data.oci_core_vnic_attachments.payment_instance_vnics.vnic_attachments[0].vnic_id
 }
 
 # Save SSH private key to file
