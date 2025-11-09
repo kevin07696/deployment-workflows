@@ -100,7 +100,7 @@ jobs:
         working-directory: ${{ inputs.terraform-directory }}
         run: |
           # Create tfvars using environment variables to avoid heredoc issues
-          cat > terraform.tfvars << 'TFVARS'
+          cat > terraform.tfvars << TFVARS
           tenancy_ocid      = "${TENANCY_OCID}"
           user_ocid         = "${USER_OCID}"
           fingerprint       = "${FINGERPRINT}"
