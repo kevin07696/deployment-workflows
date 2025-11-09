@@ -51,6 +51,8 @@ resource "oci_core_instance" "payment_instance" {
       epx_mac              = var.epx_mac
       cron_secret          = var.cron_secret
       environment          = var.environment
+      OCIR_REGION          = var.ocir_region
+      OCIR_NAMESPACE       = var.ocir_namespace
     }))
   }
 

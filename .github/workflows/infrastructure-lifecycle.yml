@@ -39,6 +39,10 @@ on:
         required: true
       SSH_PUBLIC_KEY:
         required: false
+      OCIR_REGION:
+        required: true
+      OCIR_TENANCY_NAMESPACE:
+        required: true
     outputs:
       infrastructure_exists:
         description: 'Whether infrastructure exists'
@@ -112,6 +116,8 @@ jobs:
           ${{ secrets.SSH_PUBLIC_KEY }}
           EOT
           environment       = "${{ inputs.environment }}"
+          ocir_region       = "${{ secrets.OCIR_REGION }}"
+          ocir_namespace    = "${{ secrets.OCIR_TENANCY_NAMESPACE }}"
           EOF
 
       - name: Restore Terraform State

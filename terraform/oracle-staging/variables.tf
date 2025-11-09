@@ -131,3 +131,17 @@ variable "ssh_public_key" {
   description = "SSH public key for instance access"
   type        = string
 }
+
+# ===================================
+# ORACLE CONTAINER REGISTRY (OCIR)
+# ===================================
+
+variable "ocir_region" {
+  description = "OCIR region (e.g., iad, phx)"
+  type        = string
+}
+
+variable "ocir_namespace" {
+  description = "OCIR tenancy namespace"
+  type        = string
+}
