@@ -14,7 +14,7 @@ on:
       terraform-directory:
         required: false
         type: string
-        default: 'terraform/oracle-staging'
+        default: 'deployment-workflows/terraform/oracle-staging'
         description: 'Terraform directory in deployment-workflows repo'
     secrets:
       OCI_USER_OCID:
@@ -65,8 +65,11 @@ jobs:
       db_user: ${{ steps.output.outputs.db_user }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout deployment-workflows (for terraform)
         uses: actions/checkout@v4
+        with:
+          repository: kevin07696/deployment-workflows
+          path: deployment-workflows
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
