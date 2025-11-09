@@ -108,7 +108,9 @@ jobs:
           db_app_password   = "${{ secrets.ORACLE_DB_PASSWORD }}"
           epx_mac           = "${{ secrets.EPX_MAC_STAGING }}"
           cron_secret       = "${{ secrets.CRON_SECRET_STAGING }}"
-          ssh_public_key    = "${{ secrets.SSH_PUBLIC_KEY }}"
+          ssh_public_key    = <<-EOT
+          ${{ secrets.SSH_PUBLIC_KEY }}
+          EOT
           environment       = "${{ inputs.environment }}"
           EOF
 
