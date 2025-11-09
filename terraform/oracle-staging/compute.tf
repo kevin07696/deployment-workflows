@@ -74,9 +74,11 @@ data "oci_core_vnic" "payment_instance_vnic" {
   vnic_id = data.oci_core_vnic_attachments.payment_instance_vnics.vnic_attachments[0].vnic_id
 }
 
-# Save SSH private key to file
+# Save SSH private key to file (only if we generated one, not using provided public key)
 resource "local_sensitive_file" "ssh_private_key" {
-  content  = coalesce(var.ssh_public_key != "" ? "" : tls_private_key.ssh_key.private_key_openssh, "")
-  filename = "${path.module}/oracle-staging-key"
+  count = var.ssh_public_key == "" ? 1 : 0
+
+  content         = tls_private_key.ssh_key.private_key_openssh
+  filename        = "${path.module}/oracle-staging-key"
   file_permission = "0600"
 }
