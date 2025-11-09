@@ -30,7 +30,7 @@ output "database_wallet_file" {
 
 output "ssh_private_key_file" {
   description = "Path to SSH private key (if generated)"
-  value       = var.ssh_public_key != "" ? null : local_sensitive_file.ssh_private_key.filename
+  value       = var.ssh_public_key != "" ? null : local_sensitive_file.ssh_private_key[0].filename
 }
 
 # GitHub Secrets format
@@ -62,7 +62,7 @@ output "github_secrets" {
   CRON_SECRET_STAGING=${var.cron_secret}
 
   ORACLE_CLOUD_SSH_KEY=
-  ${var.ssh_public_key != "" ? "(Use your existing key)" : "(See ${local_sensitive_file.ssh_private_key.filename})"}
+  ${var.ssh_public_key != "" ? "(Use your existing key)" : "(See ${local_sensitive_file.ssh_private_key[0].filename})"}
 
   ========================================
 
