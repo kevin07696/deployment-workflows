@@ -112,6 +112,12 @@ jobs:
           environment       = "${{ inputs.environment }}"
           EOF
 
+      - name: Restore Terraform State
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.terraform-directory }}/terraform.tfstate
+          key: terraform-state-${{ inputs.environment }}
+
       - name: Terraform Init
         working-directory: ${{ inputs.terraform-directory }}
         run: terraform init
@@ -195,6 +201,13 @@ jobs:
           name: oracle-wallet-${{ inputs.environment }}
           path: ${{ inputs.terraform-directory }}/oracle-wallet.zip
           retention-days: 7
+
+      - name: Save Terraform State
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ inputs.terraform-directory }}/terraform.tfstate
+          key: terraform-state-${{ inputs.environment }}
 
       - name: Generate Summary
         if: always()

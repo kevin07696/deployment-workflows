@@ -16,11 +16,9 @@ terraform {
     }
   }
 
-  # Store state in Oracle Object Storage (free tier)
-  backend "http" {
-    # Will be configured via environment variables:
-    # TF_HTTP_ADDRESS, TF_HTTP_LOCK_ADDRESS, TF_HTTP_UNLOCK_ADDRESS
-  }
+  # Use local backend for ephemeral staging environments
+  # State is stored in the GitHub Actions runner and discarded after
+  # For production, consider using a remote backend (S3, GCS, etc.)
 }
 
 # Oracle Cloud Infrastructure Provider
