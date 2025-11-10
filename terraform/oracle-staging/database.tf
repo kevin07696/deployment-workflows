@@ -2,9 +2,17 @@
 # AUTONOMOUS DATABASE (Always Free)
 # ===================================
 
+# Generate a random suffix to ensure database name uniqueness
+# Oracle DB names must be unique even when databases are in TERMINATING state
+resource "random_id" "db_suffix" {
+  byte_length = 2
+}
+
 resource "oci_database_autonomous_database" "payment_db" {
   compartment_id           = var.compartment_ocid
-  db_name                  = "paymentsvc"
+  # db_name must be unique across tenancy/region (max 14 chars, alphanumeric)
+  # Format: "paysvc" + 4-char hex suffix = 10 chars total
+  db_name                  = "paysvc${random_id.db_suffix.hex}"
   display_name             = "payment-${var.environment}-db"
   admin_password           = var.db_admin_password
   cpu_core_count           = 1
