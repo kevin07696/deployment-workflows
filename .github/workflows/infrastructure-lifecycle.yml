@@ -56,6 +56,28 @@ on:
       db_user:
         description: 'Database application user'
         value: ${{ jobs.manage.outputs.db_user }}
+  workflow_dispatch:
+    inputs:
+      action:
+        required: true
+        type: choice
+        options:
+          - create
+          - destroy
+          - check
+        description: 'Action to perform: create, destroy, or check'
+      environment:
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        description: 'Environment (staging or production)'
+      terraform-directory:
+        required: false
+        type: string
+        default: 'deployment-workflows/terraform/oracle-staging'
+        description: 'Terraform directory in deployment-workflows repo'
 
 jobs:
   manage:
