@@ -4,7 +4,7 @@
 
 resource "oci_database_autonomous_database" "payment_db" {
   compartment_id           = var.compartment_ocid
-  db_name                  = "paymentdb"
+  db_name                  = "paymentsvc"
   display_name             = "payment-${var.environment}-db"
   admin_password           = var.db_admin_password
   cpu_core_count           = 1
