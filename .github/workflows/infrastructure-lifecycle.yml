@@ -96,54 +96,38 @@ jobs:
           echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
 
-      - name: Create terraform.tfvars
-        working-directory: ${{ inputs.terraform-directory }}
+      - name: Validate Secrets
         run: |
-          # Strip any trailing whitespace from secrets
-          DB_ADMIN_PW_CLEAN=$(echo -n "$DB_ADMIN_PASSWORD" | tr -d '\n\r')
-          DB_APP_PW_CLEAN=$(echo -n "$DB_APP_PASSWORD" | tr -d '\n\r')
+          # Validate Oracle database admin password meets requirements (12-30 chars)
+          DB_ADMIN_PW="${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}"
+          PW_LENGTH=${#DB_ADMIN_PW}
 
-          # Debug: Check password length
-          echo "DEBUG: Admin password length: ${#DB_ADMIN_PW_CLEAN}"
-          echo "DEBUG: Admin password (first 5 chars): ${DB_ADMIN_PW_CLEAN:0:5}..."
+          echo "🔍 Validating secrets..."
+          echo "  Admin password length: $PW_LENGTH characters"
 
-          cat > terraform.tfvars << TFVARS
-          tenancy_ocid      = "${TENANCY_OCID}"
-          user_ocid         = "${USER_OCID}"
-          fingerprint       = "${FINGERPRINT}"
-          region            = "${REGION}"
-          compartment_ocid  = "${COMPARTMENT_OCID}"
-          db_admin_password = "${DB_ADMIN_PW_CLEAN}"
-          db_app_password   = "${DB_APP_PW_CLEAN}"
-          epx_mac           = "${EPX_MAC}"
-          cron_secret       = "${CRON_SECRET}"
-          environment       = "${ENVIRONMENT}"
-          ocir_region       = "${OCIR_REGION}"
-          ocir_namespace    = "${OCIR_NAMESPACE}"
+          if [ $PW_LENGTH -lt 12 ]; then
+            echo "❌ ERROR: Admin password too short ($PW_LENGTH chars)"
+            echo "   Oracle requires 12-30 characters"
+            exit 1
+          fi
 
-          private_key = <<-EOT
-          ${PRIVATE_KEY}
-          EOT
+          if [ $PW_LENGTH -gt 30 ]; then
+            echo "❌ ERROR: Admin password too long ($PW_LENGTH chars)"
+            exit 1
+          fi
 
-          ssh_public_key = <<-EOT
-          ${SSH_PUBLIC_KEY}
-          EOT
-          TFVARS
-        env:
-          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          REGION: ${{ secrets.OCI_REGION }}
-          COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-          DB_ADMIN_PASSWORD: ${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}
-          DB_APP_PASSWORD: ${{ secrets.ORACLE_DB_PASSWORD }}
-          EPX_MAC: ${{ secrets.EPX_MAC_STAGING }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET_STAGING }}
-          ENVIRONMENT: ${{ inputs.environment }}
-          OCIR_REGION: ${{ secrets.OCIR_REGION }}
-          OCIR_NAMESPACE: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
-          PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+          echo "✅ Password validation passed ($PW_LENGTH chars)"
+
+      - name: Mask Sensitive Values
+        run: |
+          echo "🔒 Masking sensitive values in logs..."
+          echo "::add-mask::${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}"
+          echo "::add-mask::${{ secrets.ORACLE_DB_PASSWORD }}"
+          echo "::add-mask::${{ secrets.EPX_MAC_STAGING }}"
+          echo "::add-mask::${{ secrets.CRON_SECRET_STAGING }}"
+          echo "::add-mask::${{ secrets.OCI_PRIVATE_KEY }}"
+          echo "::add-mask::${{ secrets.OCI_FINGERPRINT }}"
+          echo "✅ Sensitive values masked"
 
       - name: Restore Terraform State
         uses: actions/cache/restore@v4
@@ -174,6 +158,27 @@ jobs:
         run: |
           terraform plan -out=tfplan
           terraform show -no-color tfplan > plan.txt
+        env:
+          # OCI Authentication
+          TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+          TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+          TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+          TF_VAR_region: ${{ secrets.OCI_REGION }}
+          TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          TF_VAR_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
+          # Database Passwords
+          TF_VAR_db_admin_password: ${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}
+          TF_VAR_db_app_password: ${{ secrets.ORACLE_DB_PASSWORD }}
+          # Application Secrets
+          TF_VAR_epx_mac: ${{ secrets.EPX_MAC_STAGING }}
+          TF_VAR_cron_secret: ${{ secrets.CRON_SECRET_STAGING }}
+          # Environment
+          TF_VAR_environment: ${{ inputs.environment }}
+          # OCIR Configuration
+          TF_VAR_ocir_region: ${{ secrets.OCIR_REGION }}
+          TF_VAR_ocir_namespace: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
+          # SSH Access
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 
       - name: Upload Plan
         if: inputs.action == 'create' || inputs.action == 'check'
@@ -189,6 +194,27 @@ jobs:
           echo "🚀 Creating ${{ inputs.environment }} infrastructure..."
           terraform apply -auto-approve tfplan
           echo "✅ Infrastructure created successfully"
+        env:
+          # OCI Authentication
+          TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+          TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+          TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+          TF_VAR_region: ${{ secrets.OCI_REGION }}
+          TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          TF_VAR_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
+          # Database Passwords
+          TF_VAR_db_admin_password: ${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}
+          TF_VAR_db_app_password: ${{ secrets.ORACLE_DB_PASSWORD }}
+          # Application Secrets
+          TF_VAR_epx_mac: ${{ secrets.EPX_MAC_STAGING }}
+          TF_VAR_cron_secret: ${{ secrets.CRON_SECRET_STAGING }}
+          # Environment
+          TF_VAR_environment: ${{ inputs.environment }}
+          # OCIR Configuration
+          TF_VAR_ocir_region: ${{ secrets.OCIR_REGION }}
+          TF_VAR_ocir_namespace: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
+          # SSH Access
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 
       - name: Terraform Destroy
         if: inputs.action == 'destroy'
@@ -197,6 +223,27 @@ jobs:
           echo "🗑️ Destroying ${{ inputs.environment }} infrastructure..."
           terraform destroy -auto-approve
           echo "✅ Infrastructure destroyed successfully"
+        env:
+          # OCI Authentication
+          TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+          TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+          TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+          TF_VAR_region: ${{ secrets.OCI_REGION }}
+          TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          TF_VAR_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
+          # Database Passwords
+          TF_VAR_db_admin_password: ${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}
+          TF_VAR_db_app_password: ${{ secrets.ORACLE_DB_PASSWORD }}
+          # Application Secrets
+          TF_VAR_epx_mac: ${{ secrets.EPX_MAC_STAGING }}
+          TF_VAR_cron_secret: ${{ secrets.CRON_SECRET_STAGING }}
+          # Environment
+          TF_VAR_environment: ${{ inputs.environment }}
+          # OCIR Configuration
+          TF_VAR_ocir_region: ${{ secrets.OCIR_REGION }}
+          TF_VAR_ocir_namespace: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
+          # SSH Access
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 
       - name: Export Outputs
         id: output
