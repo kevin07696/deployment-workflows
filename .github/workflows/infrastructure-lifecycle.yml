@@ -278,8 +278,9 @@ jobs:
           echo "host=${ORACLE_HOST}" >> $GITHUB_OUTPUT
 
           # Extract database connection string (HIGH priority connection)
-          DB_CONN_STRINGS=$(terraform output -json database_connection_strings 2>/dev/null || echo "{}")
-          DB_CONN_HIGH=$(echo "$DB_CONN_STRINGS" | jq -r '.profiles[0].value // .high // ""')
+          # Oracle connection_strings is an array, so access the first element
+          DB_CONN_STRINGS=$(terraform output -json database_connection_strings 2>/dev/null || echo "[]")
+          DB_CONN_HIGH=$(echo "$DB_CONN_STRINGS" | jq -r '.[0].profiles[0].value // .[0].all_connection_strings.high // ""')
           echo "db_connection_string=${DB_CONN_HIGH}" >> $GITHUB_OUTPUT
 
           # Database user is hardcoded in Terraform
