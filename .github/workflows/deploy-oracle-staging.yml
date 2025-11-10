@@ -54,6 +54,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Wait for SSH to be ready
+        run: |
+          echo "⏳ Waiting for compute instance SSH to be ready..."
+          max_attempts=30
+          attempt=1
+
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt/$max_attempts: Checking SSH connectivity..."
+
+            if nc -z -w5 ${{ inputs.oracle-cloud-host }} 22 2>/dev/null; then
+              echo "✅ SSH port is open!"
+              # Give SSH daemon a few more seconds to fully initialize
+              sleep 10
+              echo "✅ SSH is ready for connections"
+              exit 0
+            fi
+
+            echo "SSH not ready yet, waiting 10 seconds..."
+            sleep 10
+            attempt=$((attempt + 1))
+          done
+
+          echo "❌ SSH did not become ready after $max_attempts attempts"
+          exit 1
+
       - name: Run Migrations via SSH
         uses: appleboy/ssh-action@master
         with:
