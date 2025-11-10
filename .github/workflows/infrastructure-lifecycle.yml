@@ -99,15 +99,18 @@ jobs:
       - name: Create terraform.tfvars
         working-directory: ${{ inputs.terraform-directory }}
         run: |
-          # Create tfvars using environment variables to avoid heredoc issues
+          # Strip any trailing whitespace from secrets
+          DB_ADMIN_PW_CLEAN=$(echo -n "$DB_ADMIN_PASSWORD" | tr -d '\n\r')
+          DB_APP_PW_CLEAN=$(echo -n "$DB_APP_PASSWORD" | tr -d '\n\r')
+
           cat > terraform.tfvars << TFVARS
           tenancy_ocid      = "${TENANCY_OCID}"
           user_ocid         = "${USER_OCID}"
           fingerprint       = "${FINGERPRINT}"
           region            = "${REGION}"
           compartment_ocid  = "${COMPARTMENT_OCID}"
-          db_admin_password = "${DB_ADMIN_PASSWORD}"
-          db_app_password   = "${DB_APP_PASSWORD}"
+          db_admin_password = "${DB_ADMIN_PW_CLEAN}"
+          db_app_password   = "${DB_APP_PW_CLEAN}"
           epx_mac           = "${EPX_MAC}"
           cron_secret       = "${CRON_SECRET}"
           environment       = "${ENVIRONMENT}"
