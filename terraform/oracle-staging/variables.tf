@@ -40,21 +40,21 @@ variable "compartment_ocid" {
 # ===================================
 
 variable "instance_shape" {
-  description = "Compute instance shape (Always Free: VM.Standard.A1.Flex)"
+  description = "Compute instance shape (Always Free: VM.Standard.E2.1.Micro)"
   type        = string
-  default     = "VM.Standard.A1.Flex"
+  default     = "VM.Standard.E2.1.Micro"
 }
 
 variable "instance_ocpus" {
-  description = "Number of OCPUs (Always Free: up to 4)"
+  description = "Number of OCPUs (E2.1.Micro: 1 OCPU fixed)"
   type        = number
-  default     = 4
+  default     = 1
 }
 
 variable "instance_memory_gb" {
-  description = "Memory in GB (Always Free: up to 24GB)"
+  description = "Memory in GB (E2.1.Micro: 1GB fixed)"
   type        = number
-  default     = 24
+  default     = 1
 }
 
 variable "instance_boot_volume_size_gb" {

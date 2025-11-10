@@ -1,9 +1,9 @@
 # ===================================
-# COMPUTE INSTANCE (Always Free Ampere A1)
+# COMPUTE INSTANCE (Always Free AMD E2.1.Micro)
 # ===================================
 
-# Get the latest Ubuntu ARM image
-data "oci_core_images" "ubuntu_arm_images" {
+# Get the latest Ubuntu x86/AMD image
+data "oci_core_images" "ubuntu_images" {
   compartment_id           = var.compartment_ocid
   operating_system         = "Canonical Ubuntu"
   operating_system_version = "22.04"
@@ -25,14 +25,12 @@ resource "oci_core_instance" "payment_instance" {
   display_name        = "payment-${var.environment}-instance"
   shape               = var.instance_shape
 
-  shape_config {
-    ocpus         = var.instance_ocpus
-    memory_in_gbs = var.instance_memory_gb
-  }
+  # Note: VM.Standard.E2.1.Micro is a fixed shape (1 OCPU, 1GB RAM)
+  # No shape_config block needed for fixed shapes
 
   source_details {
     source_type             = "image"
-    source_id               = data.oci_core_images.ubuntu_arm_images.images[0].id
+    source_id               = data.oci_core_images.ubuntu_images.images[0].id
     boot_volume_size_in_gbs = var.instance_boot_volume_size_gb
   }
 
