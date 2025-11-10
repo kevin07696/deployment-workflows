@@ -103,6 +103,10 @@ jobs:
           DB_ADMIN_PW_CLEAN=$(echo -n "$DB_ADMIN_PASSWORD" | tr -d '\n\r')
           DB_APP_PW_CLEAN=$(echo -n "$DB_APP_PASSWORD" | tr -d '\n\r')
 
+          # Debug: Check password length
+          echo "DEBUG: Admin password length: ${#DB_ADMIN_PW_CLEAN}"
+          echo "DEBUG: Admin password (first 5 chars): ${DB_ADMIN_PW_CLEAN:0:5}..."
+
           cat > terraform.tfvars << TFVARS
           tenancy_ocid      = "${TENANCY_OCID}"
           user_ocid         = "${USER_OCID}"
