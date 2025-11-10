@@ -163,6 +163,76 @@ jobs:
           echo "::add-mask::${{ secrets.OCI_FINGERPRINT }}"
           echo "✅ Sensitive values masked"
 
+      - name: Verify and Cleanup Orphaned Resources
+        if: inputs.action == 'create'
+        run: |
+          echo "🔍 Checking for orphaned OCI resources..."
+
+          # Check for orphaned Autonomous Databases
+          echo "Checking databases..."
+          DB_COUNT=$(oci db autonomous-database list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --lifecycle-state AVAILABLE \
+            --query 'length(data[?starts_with("display-name", `payment-${{ inputs.environment }}-`)])' \
+            --raw-output 2>/dev/null || echo "0")
+
+          echo "Found $DB_COUNT orphaned database(s)"
+
+          if [ "$DB_COUNT" -gt 0 ]; then
+            echo "🧹 Cleaning up orphaned databases..."
+            oci db autonomous-database list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+              --lifecycle-state AVAILABLE \
+              --query 'data[?starts_with("display-name", `payment-${{ inputs.environment }}-`)].id' \
+              --raw-output 2>/dev/null | jq -r '.[]' | while read db_id; do
+                echo "  Deleting database: $db_id"
+                oci db autonomous-database delete --autonomous-database-id "$db_id" --force 2>/dev/null || true
+            done
+
+            echo "⏳ Waiting for database deletions to complete..."
+            for i in {1..30}; do
+              REMAINING=$(oci db autonomous-database list \
+                --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+                --query 'length(data[?starts_with("display-name", `payment-${{ inputs.environment }}-`) && ("lifecycle-state" == `AVAILABLE` || "lifecycle-state" == `TERMINATING`)])' \
+                --raw-output 2>/dev/null || echo "0")
+
+              if [ "$REMAINING" -eq 0 ]; then
+                echo "✅ All databases deleted"
+                break
+              fi
+
+              echo "  $REMAINING database(s) still terminating... (attempt $i/30)"
+              sleep 10
+            done
+          fi
+
+          # Check for orphaned Compute Instances
+          echo "Checking compute instances..."
+          INSTANCE_COUNT=$(oci compute instance list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --lifecycle-state RUNNING \
+            --query 'length(data[?starts_with("display-name", `payment-${{ inputs.environment }}-`)])' \
+            --raw-output 2>/dev/null || echo "0")
+
+          echo "Found $INSTANCE_COUNT orphaned instance(s)"
+
+          if [ "$INSTANCE_COUNT" -gt 0 ]; then
+            echo "🧹 Cleaning up orphaned compute instances..."
+            oci compute instance list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+              --lifecycle-state RUNNING \
+              --query 'data[?starts_with("display-name", `payment-${{ inputs.environment }}-`)].id' \
+              --raw-output 2>/dev/null | jq -r '.[]' | while read instance_id; do
+                echo "  Terminating instance: $instance_id"
+                oci compute instance terminate --instance-id "$instance_id" --force 2>/dev/null || true
+            done
+
+            echo "⏳ Waiting for instance terminations to complete..."
+            sleep 20
+          fi
+
+          echo "✅ Resource verification complete - ready for provisioning"
+
       - name: Restore Terraform State
         uses: actions/cache/restore@v4
         with:
