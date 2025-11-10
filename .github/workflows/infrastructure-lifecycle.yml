@@ -50,9 +50,18 @@ on:
       oracle_cloud_host:
         description: 'Oracle Cloud host IP'
         value: ${{ jobs.manage.outputs.oracle_cloud_host }}
-      db_connection_string:
-        description: 'Oracle Database connection string'
-        value: ${{ jobs.manage.outputs.db_connection_string }}
+      db_host:
+        description: 'Database connection host'
+        value: ${{ jobs.manage.outputs.db_host }}
+      db_port:
+        description: 'Database connection port'
+        value: ${{ jobs.manage.outputs.db_port }}
+      db_service_name:
+        description: 'Database service name'
+        value: ${{ jobs.manage.outputs.db_service_name }}
+      db_name:
+        description: 'Database name'
+        value: ${{ jobs.manage.outputs.db_name }}
       db_user:
         description: 'Database application user'
         value: ${{ jobs.manage.outputs.db_user }}
@@ -87,7 +96,10 @@ jobs:
     outputs:
       infrastructure_exists: ${{ steps.check.outputs.exists }}
       oracle_cloud_host: ${{ steps.output.outputs.host }}
-      db_connection_string: ${{ steps.output.outputs.db_connection_string }}
+      db_host: ${{ steps.output.outputs.db_host }}
+      db_port: ${{ steps.output.outputs.db_port }}
+      db_service_name: ${{ steps.output.outputs.db_service_name }}
+      db_name: ${{ steps.output.outputs.db_name }}
       db_user: ${{ steps.output.outputs.db_user }}
 
     steps:
@@ -277,13 +289,16 @@ jobs:
           ORACLE_HOST=$(terraform output -raw oracle_cloud_host 2>/dev/null || echo "")
           echo "host=${ORACLE_HOST}" >> $GITHUB_OUTPUT
 
-          # Extract database connection string (HIGH priority connection)
-          # Oracle connection_strings is an array, so access the first element
-          DB_CONN_STRINGS=$(terraform output -json database_connection_strings 2>/dev/null || echo "[]")
-          DB_CONN_HIGH=$(echo "$DB_CONN_STRINGS" | jq -r '.[0].profiles[0].value // .[0].all_connection_strings.high // ""')
-          echo "db_connection_string=${DB_CONN_HIGH}" >> $GITHUB_OUTPUT
+          # Extract database connection components (pass separately to avoid GitHub masking)
+          DB_HOST=$(terraform output -raw database_host 2>/dev/null || echo "")
+          DB_PORT=$(terraform output -raw database_port 2>/dev/null || echo "1522")
+          DB_SERVICE=$(terraform output -raw database_service_name 2>/dev/null || echo "")
+          DB_NAME=$(terraform output -raw database_name 2>/dev/null || echo "")
 
-          # Database user is hardcoded in Terraform
+          echo "db_host=${DB_HOST}" >> $GITHUB_OUTPUT
+          echo "db_port=${DB_PORT}" >> $GITHUB_OUTPUT
+          echo "db_service_name=${DB_SERVICE}" >> $GITHUB_OUTPUT
+          echo "db_name=${DB_NAME}" >> $GITHUB_OUTPUT
           echo "db_user=payment_service" >> $GITHUB_OUTPUT
 
           echo "## Terraform Outputs" >> $GITHUB_STEP_SUMMARY

@@ -16,10 +16,18 @@ on:
         required: true
         type: string
         description: 'Oracle Cloud host IP (from infrastructure output)'
-      db-connection-string:
+      db-host:
         required: true
         type: string
-        description: 'Database connection string (from infrastructure output)'
+        description: 'Database connection host (from infrastructure output)'
+      db-port:
+        required: true
+        type: string
+        description: 'Database connection port (from infrastructure output)'
+      db-service-name:
+        required: true
+        type: string
+        description: 'Database service name (from infrastructure output)'
       db-user:
         required: true
         type: string
@@ -80,8 +88,9 @@ jobs:
               sudo mv goose_linux_arm64 /usr/local/bin/goose
             fi
 
-            # Build DATABASE_URL for Oracle Autonomous Database
-            DATABASE_URL="postgresql://${{ inputs.db-user }}:${{ secrets.ORACLE_DB_PASSWORD }}@${{ inputs.db-connection-string }}/paymentdb?sslmode=require"
+            # Build DATABASE_URL for Oracle Autonomous Database from components
+            # Construct from individual components to avoid GitHub Actions masking
+            DATABASE_URL="postgresql://${{ inputs.db-user }}:${{ secrets.ORACLE_DB_PASSWORD }}@${{ inputs.db-host }}:${{ inputs.db-port }}/${{ inputs.db-service-name }}?sslmode=require"
 
             # Run migrations
             cd ~/migrations

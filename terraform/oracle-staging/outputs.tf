@@ -23,6 +23,27 @@ output "database_connection_strings" {
   sensitive   = true
 }
 
+# Individual connection components (non-sensitive)
+output "database_name" {
+  description = "Database name (for connection string)"
+  value       = oci_database_autonomous_database.payment_db.db_name
+}
+
+output "database_host" {
+  description = "Database connection host (extracted from connection string)"
+  value       = try(regex("([^/]+):(\\d+)/", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], "")
+}
+
+output "database_port" {
+  description = "Database connection port"
+  value       = try(regex(":(\\d+)/", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], "1522")
+}
+
+output "database_service_name" {
+  description = "Database service name (extracted from connection string)"
+  value       = try(regex("/([^?]+)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], oci_database_autonomous_database.payment_db.db_name)
+}
+
 output "database_wallet_file" {
   description = "Path to downloaded wallet file"
   value       = local_file.wallet_zip.filename
