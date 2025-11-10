@@ -173,7 +173,7 @@ jobs:
           DB_COUNT=$(oci db autonomous-database list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state AVAILABLE \
-            --query 'length(data[?starts_with("display-name", `payment-${{ inputs.environment }}-`)])' \
+            --query 'length(data[?contains("display-name", `payment-${{ inputs.environment }}`)])' \
             --raw-output 2>/dev/null || echo "0")
 
           echo "Found $DB_COUNT orphaned database(s)"
@@ -183,7 +183,7 @@ jobs:
             oci db autonomous-database list \
               --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
               --lifecycle-state AVAILABLE \
-              --query 'data[?starts_with("display-name", `payment-${{ inputs.environment }}-`)].id' \
+              --query 'data[?contains("display-name", `payment-${{ inputs.environment }}`)].id' \
               --raw-output 2>/dev/null | jq -r '.[]' | while read db_id; do
                 echo "  Deleting database: $db_id"
                 oci db autonomous-database delete --autonomous-database-id "$db_id" --force 2>/dev/null || true
@@ -193,7 +193,7 @@ jobs:
             for i in {1..30}; do
               REMAINING=$(oci db autonomous-database list \
                 --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-                --query 'length(data[?starts_with("display-name", `payment-${{ inputs.environment }}-`) && ("lifecycle-state" == `AVAILABLE` || "lifecycle-state" == `TERMINATING`)])' \
+                --query 'length(data[?contains("display-name", `payment-${{ inputs.environment }}`) && ("lifecycle-state" == `AVAILABLE` || "lifecycle-state" == `TERMINATING`)])' \
                 --raw-output 2>/dev/null || echo "0")
 
               if [ "$REMAINING" -eq 0 ]; then
@@ -211,7 +211,7 @@ jobs:
           INSTANCE_COUNT=$(oci compute instance list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state RUNNING \
-            --query 'length(data[?starts_with("display-name", `payment-${{ inputs.environment }}-`)])' \
+            --query 'length(data[?contains("display-name", `payment-${{ inputs.environment }}`)])' \
             --raw-output 2>/dev/null || echo "0")
 
           echo "Found $INSTANCE_COUNT orphaned instance(s)"
@@ -221,7 +221,7 @@ jobs:
             oci compute instance list \
               --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
               --lifecycle-state RUNNING \
-              --query 'data[?starts_with("display-name", `payment-${{ inputs.environment }}-`)].id' \
+              --query 'data[?contains("display-name", `payment-${{ inputs.environment }}`)].id' \
               --raw-output 2>/dev/null | jq -r '.[]' | while read instance_id; do
                 echo "  Terminating instance: $instance_id"
                 oci compute instance terminate --instance-id "$instance_id" --force 2>/dev/null || true
