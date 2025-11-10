@@ -46,6 +46,12 @@ on:
       oracle_cloud_host:
         description: 'Oracle Cloud host IP'
         value: ${{ jobs.manage.outputs.oracle_cloud_host }}
+      db_connection_string:
+        description: 'Database connection string (host:port/service)'
+        value: ${{ jobs.manage.outputs.db_connection_string }}
+      db_user:
+        description: 'Database application user'
+        value: ${{ jobs.manage.outputs.db_user }}
 
 jobs:
   manage:
@@ -55,6 +61,8 @@ jobs:
     outputs:
       infrastructure_exists: ${{ steps.check.outputs.exists }}
       oracle_cloud_host: ${{ steps.output.outputs.host }}
+      db_connection_string: ${{ steps.output.outputs.db_conn }}
+      db_user: ${{ steps.output.outputs.db_user }}
 
     steps:
       - name: Checkout code
@@ -155,13 +163,23 @@ jobs:
         run: |
           echo "Extracting Terraform outputs..."
 
+          # Oracle Cloud Host
           ORACLE_HOST=$(terraform output -raw oracle_cloud_host 2>/dev/null || echo "")
           echo "host=${ORACLE_HOST}" >> $GITHUB_OUTPUT
+
+          # Database connection string (HIGH connection)
+          DB_CONN_HIGH=$(terraform output -json database_connection_strings 2>/dev/null | jq -r '.profiles[] | select(.consumer_group == "HIGH") | .host_format' || echo "")
+          echo "db_conn=${DB_CONN_HIGH}" >> $GITHUB_OUTPUT
+
+          # Database user (hardcoded in Terraform)
+          echo "db_user=payment_service" >> $GITHUB_OUTPUT
 
           echo "## Terraform Outputs" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "**Oracle Cloud Host:** ${ORACLE_HOST}" >> $GITHUB_STEP_SUMMARY
+          echo "**Database Connection:** ${DB_CONN_HIGH}" >> $GITHUB_STEP_SUMMARY
+          echo "**Database User:** payment_service" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Required GitHub Secrets" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
