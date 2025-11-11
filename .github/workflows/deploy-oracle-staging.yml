@@ -45,6 +45,8 @@ on:
         required: true
       ORACLE_DB_PASSWORD:
         required: true
+      ORACLE_DB_ADMIN_PASSWORD:
+        required: true
 
 jobs:
   migrate:
@@ -99,8 +101,10 @@ jobs:
           script: |
             echo "⏳ Waiting for cloud-init to complete..."
 
-            # Wait for cloud-init to finish (max 10 minutes)
-            timeout 600 cloud-init status --wait || true
+            # Wait for cloud-init to finish (max 20 minutes)
+            # Increased timeout to handle Oracle Instant Client installation
+            # and OCIR login which can take additional time
+            timeout 1200 cloud-init status --wait || true
 
             # Verify Docker is installed
             if ! command -v docker &> /dev/null; then
@@ -123,6 +127,78 @@ jobs:
             echo "✅ Cloud-init completed successfully"
             echo "   Docker version: $(docker --version)"
             echo "   Docker Compose version: $(docker-compose --version)"
+
+      - name: Download Oracle Wallet
+        uses: actions/download-artifact@v4
+        with:
+          name: oracle-wallet-staging
+          path: .
+
+      - name: Upload Oracle Wallet to Compute Instance
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ inputs.oracle-cloud-host }}
+          username: ubuntu
+          key_path: oracle-staging-key
+          source: oracle-wallet.zip
+          target: /home/ubuntu/
+
+      - name: Install Oracle Wallet
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ inputs.oracle-cloud-host }}
+          username: ubuntu
+          key_path: oracle-staging-key
+          script: |
+            echo "📦 Installing Oracle Wallet..."
+
+            # Unzip wallet
+            cd /home/ubuntu
+            unzip -o oracle-wallet.zip -d /home/ubuntu/oracle-wallet/
+
+            # Set proper permissions
+            chmod 600 /home/ubuntu/oracle-wallet/*
+
+            echo "✅ Oracle Wallet installed successfully"
+
+      - name: Download Database Init Script
+        uses: actions/download-artifact@v4
+        with:
+          name: db-init-script-staging
+          path: .
+
+      - name: Upload Database Init Script to Compute Instance
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ inputs.oracle-cloud-host }}
+          username: ubuntu
+          key_path: oracle-staging-key
+          source: init_db.sql
+          target: /home/ubuntu/
+
+      - name: Initialize Database User
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ inputs.oracle-cloud-host }}
+          username: ubuntu
+          key_path: oracle-staging-key
+          script: |
+            echo "👤 Initializing database user..."
+
+            # Oracle Instant Client is pre-installed by cloud-init
+            # Set Oracle environment variables
+            export LD_LIBRARY_PATH=/opt/oracle/instantclient_21_1:$LD_LIBRARY_PATH
+            export PATH=/opt/oracle/instantclient_21_1:$PATH
+            export TNS_ADMIN=/home/ubuntu/oracle-wallet
+
+            # Connect as ADMIN and run init script
+            # Using ADMIN user to create application user
+            ADMIN_CONN_STRING="ADMIN/${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}@${{ inputs.db-service-name }}_high"
+
+            echo "Creating application user if not exists..."
+            sqlplus -S "$ADMIN_CONN_STRING" @/home/ubuntu/init_db.sql
+
+            echo "✅ Database user initialized successfully"
 
       - name: Run Migrations via SSH
         uses: appleboy/ssh-action@master
@@ -150,34 +226,41 @@ jobs:
             mkdir -p ~/seeds
             cp -r ~/payment-service-repo/internal/db/seeds/staging/* ~/seeds/ 2>/dev/null || echo "No seeds to copy"
 
-            # Install goose if not present
-            if ! command -v goose &> /dev/null; then
-              echo "📦 Installing goose migration tool..."
-              wget -q https://github.com/pressly/goose/releases/download/v3.15.0/goose_linux_arm64
-              chmod +x goose_linux_arm64
-              sudo mv goose_linux_arm64 /usr/local/bin/goose
-            fi
+            # Oracle Instant Client is pre-installed by cloud-init
+            # Set Oracle environment variables
+            export LD_LIBRARY_PATH=/opt/oracle/instantclient_21_1:$LD_LIBRARY_PATH
+            export PATH=/opt/oracle/instantclient_21_1:$PATH
+            export TNS_ADMIN=/home/ubuntu/oracle-wallet
 
-            # Build DATABASE_URL for Oracle Autonomous Database from components
-            # Construct from individual components to avoid GitHub Actions masking
-            DATABASE_URL="postgresql://${{ inputs.db-user }}:${{ secrets.ORACLE_DB_PASSWORD }}@${{ inputs.db-host }}:${{ inputs.db-port }}/${{ inputs.db-service-name }}?sslmode=require"
+            # Build connection string for Oracle (not PostgreSQL!)
+            # Oracle connection format: user/password@//host:port/service_name
+            DB_CONN_STRING="${{ inputs.db-user }}/${{ secrets.ORACLE_DB_PASSWORD }}@${{ inputs.db-service-name }}_high"
 
-            # Run migrations
+            # Run migrations using SQL*Plus
             cd ~/migrations
-            echo "Running goose migrations..."
-            goose -dir . postgres "$DATABASE_URL" up
+            echo "Running migrations..."
+            for migration_file in $(ls *.sql | sort); do
+              echo "  - Applying migration: $migration_file"
+              # Extract only the "Up" section from goose migration files
+              sed -n '/-- +goose Up/,/-- +goose Down/p' "$migration_file" | \
+                sed '/-- +goose Down/d' | \
+                sqlplus -S "$DB_CONN_STRING" @/dev/stdin
+            done
 
             echo "✅ Migrations completed successfully"
 
             # Run seed data for staging environment
             echo "🌱 Seeding staging database..."
             cd ~/seeds
-            for seed_file in $(ls *.sql | sort); do
-              echo "  - Applying seed: $seed_file"
-              psql "$DATABASE_URL" -f "$seed_file"
-            done
-
-            echo "✅ Database seeding completed successfully"
+            if [ -n "$(ls -A *.sql 2>/dev/null)" ]; then
+              for seed_file in $(ls *.sql | sort); do
+                echo "  - Applying seed: $seed_file"
+                sqlplus -S "$DB_CONN_STRING" @"$seed_file"
+              done
+              echo "✅ Database seeding completed successfully"
+            else
+              echo "No seed files found, skipping seeding"
+            fi
 
   deploy:
     name: Deploy Application

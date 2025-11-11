@@ -49,8 +49,10 @@ resource "oci_core_instance" "payment_instance" {
       epx_mac              = var.epx_mac
       cron_secret          = var.cron_secret
       environment          = var.environment
-      OCIR_REGION          = var.ocir_region
-      OCIR_NAMESPACE       = var.ocir_namespace
+      ocir_region          = var.ocir_region
+      ocir_namespace       = var.ocir_namespace
+      ocir_username        = var.ocir_username
+      ocir_auth_token      = var.ocir_auth_token
     }))
   }
 
@@ -72,10 +74,10 @@ data "oci_core_vnic" "payment_instance_vnic" {
   vnic_id = data.oci_core_vnic_attachments.payment_instance_vnics.vnic_attachments[0].vnic_id
 }
 
-# Save SSH private key to file (only if we generated one, not using provided public key)
+# Save SSH private key to file
+# Always save the generated key, even if ssh_public_key is provided
+# This ensures the artifact upload step always has a file to upload
 resource "local_sensitive_file" "ssh_private_key" {
-  count = var.ssh_public_key == "" ? 1 : 0
-
   content         = tls_private_key.ssh_key.private_key_openssh
   filename        = "${path.module}/oracle-staging-key"
   file_permission = "0600"

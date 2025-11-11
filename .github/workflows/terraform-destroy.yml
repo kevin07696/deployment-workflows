@@ -1,4 +1,4 @@
-name: Terraform Infrastructure Provisioning
+name: Terraform Infrastructure Cleanup
 
 on:
   workflow_call:
@@ -6,7 +6,7 @@ on:
       environment:
         required: true
         type: string
-        description: 'Environment to provision (staging or production)'
+        description: 'Environment to destroy (staging or production)'
       terraform-directory:
         required: false
         type: string
@@ -16,7 +16,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: 'Auto-approve terraform apply'
+        description: 'Auto-approve terraform destroy'
     secrets:
       OCI_USER_OCID:
         required: true
@@ -50,8 +50,8 @@ on:
         required: true
 
 jobs:
-  terraform:
-    name: Provision Infrastructure
+  cleanup:
+    name: Cleanup Infrastructure
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     defaults:
@@ -104,89 +104,68 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Terraform Validate
-        run: terraform validate
-
-      - name: Terraform Plan
-        id: plan
-        run: |
-          terraform plan -out=tfplan
-          terraform show -no-color tfplan > plan.txt
-
-      - name: Upload Plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan
-          path: ${{ inputs.terraform-directory }}/plan.txt
-
-      - name: Terraform Apply
-        if: inputs.auto-approve == true || github.event_name == 'push'
-        run: terraform apply -auto-approve tfplan
-
-      - name: Save Terraform State
-        if: success()
-        uses: actions/upload-artifact@v4
+      # Critical: Restore state BEFORE attempting to destroy resources
+      # This prevents the timing race where OCI cleanup runs before state is restored
+      - name: Download Terraform State (if exists)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
         with:
           name: terraform-state-${{ inputs.environment }}
-          path: ${{ inputs.terraform-directory }}/terraform.tfstate
-          retention-days: 7
+          path: ${{ inputs.terraform-directory }}
 
-      - name: Terraform Output
-        id: output
+      - name: Restore Terraform State
+        continue-on-error: true
+        run: |
+          if [ -f terraform.tfstate ]; then
+            echo "Restoring Terraform state..."
+            cp terraform.tfstate terraform.tfstate.backup
+            echo "State restored successfully"
+          else
+            echo "No state file to restore, continuing with fresh state"
+          fi
+
+      - name: Terraform Refresh
+        continue-on-error: true
+        run: |
+          echo "Refreshing Terraform state from actual infrastructure..."
+          terraform refresh || echo "Refresh failed, continuing with destroy"
+
+      - name: Terraform Plan Destroy
+        id: plan_destroy
+        run: |
+          terraform plan -destroy -out=destroy.tfplan
+          terraform show -no-color destroy.tfplan > destroy_plan.txt
+
+      - name: Upload Destroy Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-destroy-plan-${{ inputs.environment }}
+          path: ${{ inputs.terraform-directory }}/destroy_plan.txt
+
+      - name: Terraform Destroy
+        if: inputs.auto-approve == true || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "Destroying infrastructure..."
+          terraform destroy -auto-approve
+
+          echo "✅ Infrastructure destroyed successfully"
+
+      - name: Cleanup Artifacts
         if: success()
         run: |
-          echo "Terraform outputs:"
-          terraform output -json > outputs.json
+          echo "Cleaning up local files..."
+          rm -f oracle-staging-key oracle-wallet.zip init_db.sql terraform.tfstate*
 
-          # Extract key outputs
-          ORACLE_HOST=$(terraform output -raw oracle_cloud_host)
-          echo "oracle_host=${ORACLE_HOST}" >> $GITHUB_OUTPUT
-
-          echo "✅ Infrastructure provisioned successfully"
-          echo "📍 Oracle Cloud Host: ${ORACLE_HOST}"
-
-      - name: Upload Outputs
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-outputs
-          path: ${{ inputs.terraform-directory }}/outputs.json
-
-      - name: Upload SSH Private Key
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: oracle-ssh-key-${{ inputs.environment }}
-          path: ${{ inputs.terraform-directory }}/oracle-${{ inputs.environment }}-key
-          retention-days: 1
-
-      - name: Upload Oracle Wallet
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: oracle-wallet-${{ inputs.environment }}
-          path: ${{ inputs.terraform-directory }}/oracle-wallet.zip
-          retention-days: 1
-
-      - name: Upload Database Init Script
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: db-init-script-${{ inputs.environment }}
-          path: ${{ inputs.terraform-directory }}/init_db.sql
-          retention-days: 1
-
-      - name: Display Next Steps
+      - name: Display Cleanup Summary
         if: success()
         run: |
           echo "=========================================="
-          echo "✅ Infrastructure Provisioning Complete"
+          echo "✅ Infrastructure Cleanup Complete"
           echo "=========================================="
           echo ""
-          echo "Next steps:"
-          echo "1. Add ORACLE_CLOUD_HOST to GitHub secrets"
-          echo "2. Add ORACLE_CLOUD_SSH_KEY to GitHub secrets"
-          echo "3. Deploy application with updated secrets"
+          echo "All resources have been destroyed:"
+          echo "- Compute instance"
+          echo "- Autonomous database"
+          echo "- Networking (VCN, subnet, security lists)"
           echo ""
-          echo "See terraform outputs for connection details"
           echo "=========================================="

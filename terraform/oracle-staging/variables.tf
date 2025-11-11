@@ -190,3 +190,15 @@ variable "ocir_namespace" {
   description = "OCIR tenancy namespace"
   type        = string
 }
+
+variable "ocir_username" {
+  description = "OCIR username (format: tenancy/oracleidentitycloudservice/email)"
+  type        = string
+  sensitive   = true
+}
+
+variable "ocir_auth_token" {
+  description = "OCIR authentication token"
+  type        = string
+  sensitive   = true
+}

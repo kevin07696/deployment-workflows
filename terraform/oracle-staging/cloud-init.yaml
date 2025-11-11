@@ -11,8 +11,9 @@ packages:
   - docker-compose
   - curl
   - jq
-  - postgresql-client
   - unzip
+  - libaio1
+  - wget
 
 runcmd:
   # Enable and start Docker
@@ -21,6 +22,9 @@ runcmd:
 
   # Add ubuntu user to docker group
   - usermod -aG docker ubuntu
+
+  # Wait for Docker to be fully ready
+  - sleep 5
 
   # Create application directory
   - mkdir -p /home/ubuntu/payment-service
@@ -36,6 +40,27 @@ runcmd:
   - ufw allow 8081/tcp  # HTTP Cron
   - ufw --force enable
 
+  # Install Oracle Instant Client (for database migrations and SQL*Plus)
+  - |
+    echo "📦 Installing Oracle Instant Client..."
+    mkdir -p /opt/oracle
+    cd /tmp
+    wget -q https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basic-linux.x64-21.1.0.0.0.zip
+    wget -q https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-sqlplus-linux.x64-21.1.0.0.0.zip
+    unzip -q -o instantclient-basic-linux.x64-21.1.0.0.0.zip -d /opt/oracle/
+    unzip -q -o instantclient-sqlplus-linux.x64-21.1.0.0.0.zip -d /opt/oracle/
+    sh -c "echo /opt/oracle/instantclient_21_1 > /etc/ld.so.conf.d/oracle-instantclient.conf"
+    ldconfig
+    rm -f instantclient-*.zip
+    echo "✅ Oracle Instant Client installed"
+
+  # Login to Oracle Container Registry (OCIR)
+  # This persists Docker credentials so docker-compose can pull images
+  - |
+    echo "${ocir_auth_token}" | docker login ${ocir_region}.ocir.io \
+      -u "${ocir_username}" \
+      --password-stdin
+
   # Create .env file for application
   - |
     cat > /home/ubuntu/payment-service/.env <<EOF
@@ -43,8 +68,8 @@ runcmd:
     ENVIRONMENT=${environment}
 
     # Oracle Container Registry (OCIR)
-    OCIR_REGION=${OCIR_REGION}
-    OCIR_NAMESPACE=${OCIR_NAMESPACE}
+    OCIR_REGION=${ocir_region}
+    OCIR_NAMESPACE=${ocir_namespace}
 
     # Database (Oracle Autonomous Database)
     DB_HOST=${db_connection_string}
@@ -88,7 +113,7 @@ runcmd:
 
     services:
       payment-service:
-        image: \${OCIR_REGION}.ocir.io/\${OCIR_NAMESPACE}/payment-service:latest
+        image: ${ocir_region}.ocir.io/${ocir_namespace}/payment-service:latest
         container_name: payment-${environment}
         restart: unless-stopped
         ports:

@@ -43,3 +43,44 @@ resource "local_file" "wallet_zip" {
   content_base64 = oci_database_autonomous_database_wallet.payment_db_wallet.content
   filename       = "${path.module}/oracle-wallet.zip"
 }
+
+# Create database initialization SQL script
+# This script creates the application user and grants necessary permissions
+resource "local_file" "db_init_script" {
+  filename = "${path.module}/init_db.sql"
+  content  = <<-EOF
+    -- Create application user and grant privileges
+    -- All operations in single PL/SQL block for atomicity
+    DECLARE
+      user_exists NUMBER;
+    BEGIN
+      -- Check if user exists
+      SELECT COUNT(*) INTO user_exists FROM dba_users WHERE username = UPPER('${var.db_app_user}');
+
+      -- Create user if doesn't exist
+      IF user_exists = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE USER ${var.db_app_user} IDENTIFIED BY "${var.db_app_password}"';
+      END IF;
+
+      -- Grant privileges (executes whether user was just created or already existed)
+      EXECUTE IMMEDIATE 'GRANT CONNECT TO ${var.db_app_user}';
+      EXECUTE IMMEDIATE 'GRANT RESOURCE TO ${var.db_app_user}';
+      EXECUTE IMMEDIATE 'GRANT CREATE SESSION TO ${var.db_app_user}';
+      EXECUTE IMMEDIATE 'GRANT CREATE TABLE TO ${var.db_app_user}';
+      EXECUTE IMMEDIATE 'GRANT CREATE VIEW TO ${var.db_app_user}';
+      EXECUTE IMMEDIATE 'GRANT CREATE SEQUENCE TO ${var.db_app_user}';
+      EXECUTE IMMEDIATE 'GRANT CREATE PROCEDURE TO ${var.db_app_user}';
+      EXECUTE IMMEDIATE 'GRANT CREATE TRIGGER TO ${var.db_app_user}';
+
+      -- Grant unlimited tablespace quota
+      EXECUTE IMMEDIATE 'ALTER USER ${var.db_app_user} QUOTA UNLIMITED ON DATA';
+
+      -- Commit all changes
+      COMMIT;
+    END;
+    /
+
+    -- Exit SQL*Plus
+    EXIT;
+  EOF
+}
