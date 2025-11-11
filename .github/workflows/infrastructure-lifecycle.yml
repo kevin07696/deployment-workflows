@@ -178,14 +178,19 @@ jobs:
           if ! command -v oci &> /dev/null; then
             echo "❌ OCI CLI not found, installing..."
             bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)" -- --accept-all-defaults
+
+            # Add to PATH for future steps AND current step
             echo "$HOME/bin" >> $GITHUB_PATH
+            export PATH="$HOME/bin:$PATH"
+
+            echo "✅ OCI CLI installed: $(oci --version)"
           else
             echo "✅ OCI CLI version: $(oci --version)"
           fi
 
           # Test OCI authentication
           echo "Testing OCI authentication..."
-          if oci iam region list --limit 1 >/dev/null 2>&1; then
+          if $HOME/bin/oci iam region list --limit 1 >/dev/null 2>&1; then
             echo "✅ OCI authentication successful"
           else
             echo "❌ OCI authentication failed - checking config..."
