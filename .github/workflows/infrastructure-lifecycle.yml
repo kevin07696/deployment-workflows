@@ -190,8 +190,8 @@ jobs:
 
           # Test OCI authentication
           echo "Testing OCI authentication..."
-          echo "Running: $HOME/bin/oci iam region list --limit 1"
-          if $HOME/bin/oci iam region list --limit 1; then
+          echo "Running: $HOME/bin/oci iam region list --output table"
+          if $HOME/bin/oci iam region list --output table >/dev/null 2>&1; then
             echo "✅ OCI authentication successful"
           else
             echo "❌ OCI authentication failed - detailed diagnostics:"
