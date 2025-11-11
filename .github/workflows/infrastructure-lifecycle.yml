@@ -163,6 +163,30 @@ jobs:
           echo "::add-mask::${{ secrets.OCI_FINGERPRINT }}"
           echo "✅ Sensitive values masked"
 
+      - name: Verify OCI CLI Configuration
+        if: inputs.action == 'create'
+        run: |
+          echo "🔍 Verifying OCI CLI setup..."
+
+          # Check OCI CLI is installed
+          if ! command -v oci &> /dev/null; then
+            echo "❌ OCI CLI not found, installing..."
+            bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)" -- --accept-all-defaults
+            echo "$HOME/bin" >> $GITHUB_PATH
+          else
+            echo "✅ OCI CLI version: $(oci --version)"
+          fi
+
+          # Test OCI authentication
+          echo "Testing OCI authentication..."
+          if oci iam region list --limit 1 >/dev/null 2>&1; then
+            echo "✅ OCI authentication successful"
+          else
+            echo "❌ OCI authentication failed - checking config..."
+            cat ~/.oci/config
+            exit 1
+          fi
+
       - name: Verify and Cleanup Orphaned Resources
         if: inputs.action == 'create'
         run: |
@@ -173,7 +197,7 @@ jobs:
           DB_COUNT=$(oci db autonomous-database list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state AVAILABLE \
-            --all 2>/dev/null | \
+            --all | \
             jq '([.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}"))] | length) // 0')
 
           echo "Found $DB_COUNT orphaned database(s)"
@@ -183,18 +207,18 @@ jobs:
             oci db autonomous-database list \
               --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
               --lifecycle-state AVAILABLE \
-              --all 2>/dev/null | \
+              --all | \
               jq -r '.data[] | select(."display-name" | contains("payment-${{ inputs.environment }}")) | .id' | \
               while read db_id; do
                 echo "  Deleting database: $db_id"
-                oci db autonomous-database delete --autonomous-database-id "$db_id" --force 2>/dev/null || true
+                oci db autonomous-database delete --autonomous-database-id "$db_id" --force || true
             done
 
             echo "⏳ Waiting for database deletions to complete..."
             for i in {1..30}; do
               REMAINING=$(oci db autonomous-database list \
                 --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-                --all 2>/dev/null | \
+                --all | \
                 jq '([.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}")) | select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "TERMINATING")] | length) // 0')
 
               if [ "$REMAINING" -eq 0 ]; then
@@ -212,7 +236,7 @@ jobs:
           INSTANCE_COUNT=$(oci compute instance list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state RUNNING \
-            --all 2>/dev/null | \
+            --all | \
             jq '([.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}"))] | length) // 0')
 
           echo "Found $INSTANCE_COUNT orphaned instance(s)"
@@ -222,11 +246,11 @@ jobs:
             oci compute instance list \
               --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
               --lifecycle-state RUNNING \
-              --all 2>/dev/null | \
+              --all | \
               jq -r '.data[] | select(."display-name" | contains("payment-${{ inputs.environment }}")) | .id' | \
               while read instance_id; do
                 echo "  Terminating instance: $instance_id"
-                oci compute instance terminate --instance-id "$instance_id" --force 2>/dev/null || true
+                oci compute instance terminate --instance-id "$instance_id" --force || true
             done
 
             echo "⏳ Waiting for instance terminations to complete..."
@@ -238,7 +262,7 @@ jobs:
           TOTAL_DATABASES=$(oci db autonomous-database list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state AVAILABLE \
-            --all 2>/dev/null | \
+            --all | \
             jq '([.data[]? | select(.["is-free-tier"] == true)] | length) // 0')
 
           echo "Found $TOTAL_DATABASES Always Free database(s) in compartment (Oracle limit: 2)"
@@ -256,7 +280,7 @@ jobs:
           TOTAL_INSTANCES=$(oci compute instance list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state RUNNING \
-            --all 2>/dev/null | \
+            --all | \
             jq '([.data[]?] | length) // 0')
 
           echo "Found $TOTAL_INSTANCES running instance(s) in compartment (Oracle limit: 2 Free Tier instances)"
@@ -269,18 +293,18 @@ jobs:
             oci compute instance list \
               --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
               --lifecycle-state RUNNING \
-              --all 2>/dev/null | \
+              --all | \
               jq -r '.data[]? | "  - \(."display-name") (ID: \(.id), Created: \(."time-created"))"'
             echo ""
             echo "Terminating orphaned instances automatically..."
             oci compute instance list \
               --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
               --lifecycle-state RUNNING \
-              --all 2>/dev/null | \
+              --all | \
               jq -r '.data[]? | .id' | \
               while read instance_id; do
                 echo "  Terminating: $instance_id"
-                oci compute instance terminate --instance-id "$instance_id" --force 2>/dev/null || true
+                oci compute instance terminate --instance-id "$instance_id" --force || true
               done
             echo ""
             echo "⏳ Waiting 30 seconds for terminations..."
@@ -376,6 +400,37 @@ jobs:
           TF_VAR_ocir_namespace: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
           # SSH Access
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+
+      - name: Cleanup Orphaned Resources (OCI CLI)
+        if: inputs.action == 'destroy'
+        run: |
+          echo "🧹 Cleaning up orphaned OCI resources before Terraform destroy..."
+
+          # Find and delete orphaned databases
+          echo "Looking for orphaned databases..."
+          oci db autonomous-database list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --all | \
+            jq -r '.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}")) | select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "PROVISIONING") | .id' | \
+            while read db_id; do
+              echo "  Deleting database: $db_id"
+              oci db autonomous-database delete --autonomous-database-id "$db_id" --force || true
+            done
+
+          # Find and terminate orphaned compute instances
+          echo "Looking for orphaned compute instances..."
+          oci compute instance list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --all | \
+            jq -r '.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}")) | select(."lifecycle-state" == "RUNNING" or ."lifecycle-state" == "STARTING") | .id' | \
+            while read instance_id; do
+              echo "  Terminating instance: $instance_id"
+              oci compute instance terminate --instance-id "$instance_id" --force || true
+            done
+
+          echo "⏳ Waiting 30 seconds for resource deletions to process..."
+          sleep 30
+          echo "✅ OCI CLI cleanup complete"
 
       - name: Terraform Destroy
         if: inputs.action == 'destroy'
