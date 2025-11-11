@@ -152,12 +152,44 @@ jobs:
           script: |
             echo "📦 Installing Oracle Wallet..."
 
+            # Remove existing wallet directory if present
+            rm -rf /home/ubuntu/oracle-wallet
+
+            # Create wallet directory
+            mkdir -p /home/ubuntu/oracle-wallet
+
             # Unzip wallet
             cd /home/ubuntu
             unzip -o oracle-wallet.zip -d /home/ubuntu/oracle-wallet/
 
-            # Set proper permissions
-            chmod 600 /home/ubuntu/oracle-wallet/*
+            # Set proper ownership
+            chown -R ubuntu:ubuntu /home/ubuntu/oracle-wallet
+
+            # Set directory permissions (need execute to cd into it)
+            chmod 755 /home/ubuntu/oracle-wallet
+
+            # Set wallet file permissions (readable by owner)
+            chmod 644 /home/ubuntu/oracle-wallet/*
+
+            # Verify wallet files exist
+            echo "Wallet contents:"
+            ls -la /home/ubuntu/oracle-wallet/
+
+            # Verify required wallet files are present
+            if [ ! -f /home/ubuntu/oracle-wallet/cwallet.sso ]; then
+              echo "❌ ERROR: cwallet.sso not found!"
+              exit 1
+            fi
+
+            if [ ! -f /home/ubuntu/oracle-wallet/tnsnames.ora ]; then
+              echo "❌ ERROR: tnsnames.ora not found!"
+              exit 1
+            fi
+
+            if [ ! -f /home/ubuntu/oracle-wallet/sqlnet.ora ]; then
+              echo "❌ ERROR: sqlnet.ora not found!"
+              exit 1
+            fi
 
             echo "✅ Oracle Wallet installed successfully"
 
