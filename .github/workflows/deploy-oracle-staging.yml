@@ -79,12 +79,23 @@ jobs:
           echo "❌ SSH did not become ready after $max_attempts attempts"
           exit 1
 
+      - name: Download SSH Private Key
+        uses: actions/download-artifact@v4
+        with:
+          name: oracle-ssh-key-staging
+          path: .
+
+      - name: Set SSH Key Permissions
+        run: |
+          chmod 600 oracle-staging-key
+          ls -la oracle-staging-key
+
       - name: Run Migrations via SSH
         uses: appleboy/ssh-action@master
         with:
           host: ${{ inputs.oracle-cloud-host }}
           username: ubuntu
-          key: ${{ secrets.ORACLE_CLOUD_SSH_KEY }}
+          key_path: oracle-staging-key
           script: |
             echo "🔄 Running database migrations on Oracle Autonomous Database..."
 
@@ -162,12 +173,21 @@ jobs:
 
           echo "✅ Image pushed successfully"
 
+      - name: Download SSH Private Key
+        uses: actions/download-artifact@v4
+        with:
+          name: oracle-ssh-key-staging
+          path: .
+
+      - name: Set SSH Key Permissions
+        run: chmod 600 oracle-staging-key
+
       - name: Deploy to Oracle Compute Instance
         uses: appleboy/ssh-action@master
         with:
           host: ${{ inputs.oracle-cloud-host }}
           username: ubuntu
-          key: ${{ secrets.ORACLE_CLOUD_SSH_KEY }}
+          key_path: oracle-staging-key
           script: |
             echo "🔐 Logging into Oracle Container Registry..."
             echo "${{ secrets.OCIR_AUTH_TOKEN }}" | docker login ${{ secrets.OCIR_REGION }}.ocir.io \

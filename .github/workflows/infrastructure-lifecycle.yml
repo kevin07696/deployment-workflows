@@ -392,6 +392,14 @@ jobs:
           path: ${{ inputs.terraform-directory }}/oracle-wallet.zip
           retention-days: 7
 
+      - name: Save SSH Private Key
+        if: inputs.action == 'create' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-ssh-key-${{ inputs.environment }}
+          path: ${{ inputs.terraform-directory }}/oracle-staging-key
+          retention-days: 7
+
       - name: Save Terraform State
         if: always()
         uses: actions/cache/save@v4
