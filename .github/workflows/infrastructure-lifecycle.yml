@@ -174,7 +174,7 @@ jobs:
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state AVAILABLE \
             --all 2>/dev/null | \
-            jq '[.data[] | select(."display-name" | contains("payment-${{ inputs.environment }}"))] | length')
+            jq '([.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}"))] | length) // 0')
 
           echo "Found $DB_COUNT orphaned database(s)"
 
@@ -195,7 +195,7 @@ jobs:
               REMAINING=$(oci db autonomous-database list \
                 --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
                 --all 2>/dev/null | \
-                jq '[.data[] | select(."display-name" | contains("payment-${{ inputs.environment }}")) | select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "TERMINATING")] | length')
+                jq '([.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}")) | select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "TERMINATING")] | length) // 0')
 
               if [ "$REMAINING" -eq 0 ]; then
                 echo "✅ All databases deleted"
@@ -213,7 +213,7 @@ jobs:
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state RUNNING \
             --all 2>/dev/null | \
-            jq '[.data[] | select(."display-name" | contains("payment-${{ inputs.environment }}"))] | length')
+            jq '([.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}"))] | length) // 0')
 
           echo "Found $INSTANCE_COUNT orphaned instance(s)"
 
@@ -231,6 +231,33 @@ jobs:
 
             echo "⏳ Waiting for instance terminations to complete..."
             sleep 20
+          fi
+
+          # Check Oracle Free Tier quota
+          echo "Checking Oracle Free Tier database quota..."
+          TOTAL_DATABASES=$(oci db autonomous-database list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --lifecycle-state AVAILABLE \
+            --all 2>/dev/null | \
+            jq '([.data[]? | select(.["is-free-tier"] == true)] | length) // 0')
+
+          echo "Found $TOTAL_DATABASES Always Free database(s) in compartment (Oracle limit: 2)"
+
+          if [ "$TOTAL_DATABASES" -ge 2 ]; then
+            echo "❌ ERROR: Oracle Free Tier quota exceeded!"
+            echo "You have $TOTAL_DATABASES Always Free databases, but Oracle only allows 2 per account."
+            echo ""
+            echo "To proceed, you must manually delete one or more Always Free databases:"
+            echo "1. Go to Oracle Cloud Console: https://cloud.oracle.com"
+            echo "2. Navigate to: Databases > Autonomous Database"
+            echo "3. Delete databases you no longer need"
+            echo ""
+            oci db autonomous-database list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+              --lifecycle-state AVAILABLE \
+              --all 2>/dev/null | \
+              jq -r '.data[]? | select(.["is-free-tier"] == true) | "  - \(."display-name") (ID: \(.id))"'
+            exit 1
           fi
 
           echo "✅ Resource verification complete - ready for provisioning"
