@@ -90,6 +90,40 @@ jobs:
           chmod 600 oracle-staging-key
           ls -la oracle-staging-key
 
+      - name: Wait for cloud-init to complete
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ inputs.oracle-cloud-host }}
+          username: ubuntu
+          key_path: oracle-staging-key
+          script: |
+            echo "⏳ Waiting for cloud-init to complete..."
+
+            # Wait for cloud-init to finish (max 10 minutes)
+            timeout 600 cloud-init status --wait || true
+
+            # Verify Docker is installed
+            if ! command -v docker &> /dev/null; then
+              echo "❌ Docker not installed after cloud-init completion"
+              exit 1
+            fi
+
+            # Verify docker-compose is installed
+            if ! command -v docker-compose &> /dev/null; then
+              echo "❌ docker-compose not installed after cloud-init completion"
+              exit 1
+            fi
+
+            # Verify application directory exists
+            if [ ! -d ~/payment-service ]; then
+              echo "❌ Application directory not created by cloud-init"
+              exit 1
+            fi
+
+            echo "✅ Cloud-init completed successfully"
+            echo "   Docker version: $(docker --version)"
+            echo "   Docker Compose version: $(docker-compose --version)"
+
       - name: Run Migrations via SSH
         uses: appleboy/ssh-action@master
         with:
@@ -181,6 +215,29 @@ jobs:
 
       - name: Set SSH Key Permissions
         run: chmod 600 oracle-staging-key
+
+      - name: Verify Environment
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ inputs.oracle-cloud-host }}
+          username: ubuntu
+          key_path: oracle-staging-key
+          script: |
+            echo "🔍 Verifying deployment environment..."
+
+            # Ensure Docker is available
+            if ! command -v docker &> /dev/null; then
+              echo "❌ Docker not available"
+              exit 1
+            fi
+
+            # Ensure docker-compose is available
+            if ! command -v docker-compose &> /dev/null; then
+              echo "❌ docker-compose not available"
+              exit 1
+            fi
+
+            echo "✅ Environment ready for deployment"
 
       - name: Deploy to Oracle Compute Instance
         uses: appleboy/ssh-action@master
