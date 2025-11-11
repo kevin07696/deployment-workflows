@@ -190,11 +190,20 @@ jobs:
 
           # Test OCI authentication
           echo "Testing OCI authentication..."
-          if $HOME/bin/oci iam region list --limit 1 >/dev/null 2>&1; then
+          echo "Running: $HOME/bin/oci iam region list --limit 1"
+          if $HOME/bin/oci iam region list --limit 1; then
             echo "✅ OCI authentication successful"
           else
-            echo "❌ OCI authentication failed - checking config..."
+            echo "❌ OCI authentication failed - detailed diagnostics:"
+            echo ""
+            echo "Config file:"
             cat ~/.oci/config
+            echo ""
+            echo "Key file exists:"
+            ls -la ~/.oci/oci_api_key.pem || echo "Key file not found"
+            echo ""
+            echo "Key file permissions:"
+            stat ~/.oci/oci_api_key.pem || echo "Cannot stat key file"
             exit 1
           fi
 
