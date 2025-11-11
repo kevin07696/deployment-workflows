@@ -128,7 +128,7 @@ jobs:
           fingerprint=${{ secrets.OCI_FINGERPRINT }}
           tenancy=${{ secrets.OCI_TENANCY_OCID }}
           region=${{ secrets.OCI_REGION }}
-          key_file=~/.oci/oci_api_key.pem
+          key_file=$HOME/.oci/oci_api_key.pem
           EOF
 
           echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
