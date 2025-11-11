@@ -233,7 +233,7 @@ jobs:
             sleep 20
           fi
 
-          # Check Oracle Free Tier quota
+          # Check Oracle Free Tier database quota
           echo "Checking Oracle Free Tier database quota..."
           TOTAL_DATABASES=$(oci db autonomous-database list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
@@ -244,20 +244,48 @@ jobs:
           echo "Found $TOTAL_DATABASES Always Free database(s) in compartment (Oracle limit: 2)"
 
           if [ "$TOTAL_DATABASES" -ge 2 ]; then
-            echo "❌ ERROR: Oracle Free Tier quota exceeded!"
+            echo "❌ ERROR: Oracle Free Tier database quota exceeded!"
             echo "You have $TOTAL_DATABASES Always Free databases, but Oracle only allows 2 per account."
             echo ""
-            echo "To proceed, you must manually delete one or more Always Free databases:"
-            echo "1. Go to Oracle Cloud Console: https://cloud.oracle.com"
-            echo "2. Navigate to: Databases > Autonomous Database"
-            echo "3. Delete databases you no longer need"
-            echo ""
-            oci db autonomous-database list \
-              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-              --lifecycle-state AVAILABLE \
-              --all 2>/dev/null | \
-              jq -r '.data[]? | select(.["is-free-tier"] == true) | "  - \(."display-name") (ID: \(.id))"'
+            echo "Run cleanup script: ./scripts/cleanup-oracle-databases.sh"
             exit 1
+          fi
+
+          # Check Oracle Free Tier compute quota
+          echo "Checking Oracle Free Tier compute quota..."
+          TOTAL_INSTANCES=$(oci compute instance list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --lifecycle-state RUNNING \
+            --all 2>/dev/null | \
+            jq '([.data[]?] | length) // 0')
+
+          echo "Found $TOTAL_INSTANCES running instance(s) in compartment (Oracle limit: 2 Free Tier instances)"
+
+          if [ "$TOTAL_INSTANCES" -ge 2 ]; then
+            echo "❌ ERROR: Oracle Free Tier compute quota exceeded!"
+            echo "You have $TOTAL_INSTANCES running instances, but Oracle Free Tier limit is 2."
+            echo ""
+            echo "Orphaned instances found:"
+            oci compute instance list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+              --lifecycle-state RUNNING \
+              --all 2>/dev/null | \
+              jq -r '.data[]? | "  - \(."display-name") (ID: \(.id), Created: \(."time-created"))"'
+            echo ""
+            echo "Terminating orphaned instances automatically..."
+            oci compute instance list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+              --lifecycle-state RUNNING \
+              --all 2>/dev/null | \
+              jq -r '.data[]? | .id' | \
+              while read instance_id; do
+                echo "  Terminating: $instance_id"
+                oci compute instance terminate --instance-id "$instance_id" --force 2>/dev/null || true
+              done
+            echo ""
+            echo "⏳ Waiting 30 seconds for terminations..."
+            sleep 30
+            echo "✅ Compute quota freed"
           fi
 
           echo "✅ Resource verification complete - ready for provisioning"
