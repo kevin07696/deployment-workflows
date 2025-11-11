@@ -42,6 +42,10 @@ runcmd:
     # Environment
     ENVIRONMENT=${environment}
 
+    # Oracle Container Registry (OCIR)
+    OCIR_REGION=${OCIR_REGION}
+    OCIR_NAMESPACE=${OCIR_NAMESPACE}
+
     # Database (Oracle Autonomous Database)
     DB_HOST=${db_connection_string}
     DB_PORT=1522
