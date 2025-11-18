@@ -7,24 +7,71 @@ package_update: true
 package_upgrade: true
 
 packages:
-  - docker.io
-  - docker-compose
+  - apt-transport-https
+  - ca-certificates
   - curl
+  - gnupg
+  - lsb-release
   - jq
   - unzip
   - libaio1
   - wget
 
 runcmd:
-  # Enable and start Docker
+  # Install Docker using official Docker repository (more reliable than docker.io package)
+  - |
+    set -euo pipefail
+    echo "📦 Installing Docker from official repository..."
+
+    # Add Docker's official GPG key
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
+
+    # Add Docker repository
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    # Update package index with Docker repo
+    apt-get update
+
+    # Install Docker Engine and Docker Compose plugin
+    DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    echo "✅ Docker packages installed"
+
+  # Enable and start Docker service
   - systemctl enable docker
   - systemctl start docker
 
   # Add ubuntu user to docker group
   - usermod -aG docker ubuntu
 
-  # Wait for Docker to be fully ready
-  - sleep 5
+  # Verify Docker installation with retry logic
+  - |
+    echo "🔍 Verifying Docker installation..."
+    for i in $(seq 1 30); do
+      if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+        echo "✅ Docker installed and running: $(docker --version)"
+        break
+      fi
+      echo "Waiting for Docker to be available... ($i/30)"
+      sleep 2
+    done
+
+    # Final verification
+    if ! docker version >/dev/null 2>&1; then
+      echo "❌ Docker installation failed!"
+      systemctl status docker || true
+      exit 1
+    fi
+
+    # Verify docker compose plugin
+    if docker compose version >/dev/null 2>&1; then
+      echo "✅ Docker Compose plugin available: $(docker compose version)"
+    else
+      echo "❌ Docker Compose plugin not found!"
+      exit 1
+    fi
 
   # Create application directory
   - mkdir -p /home/ubuntu/payment-service
@@ -55,11 +102,13 @@ runcmd:
     echo "✅ Oracle Instant Client installed"
 
   # Login to Oracle Container Registry (OCIR)
-  # This persists Docker credentials so docker-compose can pull images
+  # This persists Docker credentials so deployment can pull images
   - |
+    echo "🔐 Logging into Oracle Container Registry..."
     echo "${ocir_auth_token}" | docker login ${ocir_region}.ocir.io \
       -u "${ocir_username}" \
       --password-stdin
+    echo "✅ OCIR login successful"
 
   # Create .env file for application
   - |
@@ -106,37 +155,8 @@ runcmd:
   - chown ubuntu:ubuntu /home/ubuntu/payment-service/.env
   - chmod 600 /home/ubuntu/payment-service/.env
 
-  # Create docker-compose.yml
-  - |
-    cat > /home/ubuntu/payment-service/docker-compose.yml <<EOF
-    version: '3.8'
-
-    services:
-      payment-service:
-        image: ${ocir_region}.ocir.io/${ocir_namespace}/payment-service:latest
-        container_name: payment-${environment}
-        restart: unless-stopped
-        ports:
-          - "8080:8080"  # gRPC
-          - "8081:8081"  # HTTP Cron
-        env_file:
-          - .env
-        volumes:
-          - /home/ubuntu/oracle-wallet:/home/ubuntu/oracle-wallet:ro
-        healthcheck:
-          test: ["CMD", "curl", "-f", "http://localhost:8081/cron/health"]
-          interval: 30s
-          timeout: 10s
-          retries: 3
-          start_period: 40s
-        logging:
-          driver: "json-file"
-          options:
-            max-size: "10m"
-            max-file: "3"
-    EOF
-
-  - chown ubuntu:ubuntu /home/ubuntu/payment-service/docker-compose.yml
+  # Note: Application deployment uses 'docker run' directly (not docker-compose)
+  # The deployment workflow handles container orchestration
 
 write_files:
   - path: /etc/motd
@@ -148,9 +168,10 @@ write_files:
       Application:  /home/ubuntu/payment-service
       Wallet:       /home/ubuntu/oracle-wallet
 
-      View logs:    docker logs payment-${environment} -f
-      Restart:      cd ~/payment-service && docker-compose restart
-      Deploy:       cd ~/payment-service && docker-compose pull && docker-compose up -d
+      View logs:    docker logs payment-server -f
+      Restart:      docker restart payment-server
+      Stop:         docker stop payment-server
+      Status:       docker ps -a | grep payment-server
 
       ==========================================
     owner: root:root

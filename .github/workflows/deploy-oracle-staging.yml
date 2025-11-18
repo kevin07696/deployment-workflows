@@ -112,19 +112,46 @@ jobs:
             echo "⏳ Waiting for cloud-init to complete..."
 
             # Wait for cloud-init to finish (max 20 minutes)
-            # Increased timeout to handle Oracle Instant Client installation
-            # and OCIR login which can take additional time
-            timeout 1200 cloud-init status --wait || true
-
-            # Verify Docker is installed
-            if ! command -v docker &> /dev/null; then
-              echo "❌ Docker not installed after cloud-init completion"
+            # Increased timeout to handle Docker installation and Oracle Instant Client
+            if timeout 1200 cloud-init status --wait; then
+              echo "✅ cloud-init completed successfully"
+            else
+              echo "❌ cloud-init failed or timed out!"
+              echo ""
+              echo "=== Cloud-init status ==="
+              cloud-init status --long || true
+              echo ""
+              echo "=== Last 100 lines of cloud-init output ==="
+              sudo tail -n 100 /var/log/cloud-init-output.log || true
+              echo ""
+              echo "=== Last 50 lines of cloud-init log ==="
+              sudo tail -n 50 /var/log/cloud-init.log || true
               exit 1
             fi
 
-            # Verify docker-compose is installed
-            if ! command -v docker-compose &> /dev/null; then
-              echo "❌ docker-compose not installed after cloud-init completion"
+            # Verify Docker is installed and working
+            echo "🔍 Verifying Docker installation..."
+            if ! command -v docker &> /dev/null; then
+              echo "❌ Docker command not found!"
+              echo "cloud-init may have failed to install Docker"
+              sudo tail -n 100 /var/log/cloud-init-output.log || true
+              exit 1
+            fi
+
+            if ! docker version &> /dev/null; then
+              echo "❌ Docker installed but not working!"
+              echo "Docker version check failed"
+              sudo systemctl status docker || true
+              exit 1
+            fi
+
+            echo "✅ Docker verified: $(docker --version)"
+
+            # Verify docker compose plugin
+            if docker compose version &> /dev/null; then
+              echo "✅ Docker Compose plugin verified: $(docker compose version)"
+            else
+              echo "❌ Docker Compose plugin not available!"
               exit 1
             fi
 
@@ -134,9 +161,7 @@ jobs:
               exit 1
             fi
 
-            echo "✅ Cloud-init completed successfully"
-            echo "   Docker version: $(docker --version)"
-            echo "   Docker Compose version: $(docker-compose --version)"
+            echo "✅ All verifications passed - instance ready for deployment"
 
       - name: Download Oracle Wallet
         uses: actions/download-artifact@v4
