@@ -106,12 +106,29 @@ write_files:
       set -euo pipefail
 
       # Login to Oracle Container Registry (OCIR)
-      # This persists Docker credentials so deployment can pull images
-      echo "🔐 Logging into Oracle Container Registry..."
+      # OCIR credentials are optional - login failure won't abort provisioning
+      # This allows cloud-init to succeed even if OCIR credentials are invalid/expired
+      echo "🔐 Attempting to login to Oracle Container Registry..."
+
+      # Temporarily disable exit-on-error for OCIR login
+      set +e
       echo "${ocir_auth_token}" | docker login ${ocir_region}.ocir.io \
         -u "${ocir_username}" \
         --password-stdin
-      echo "✅ OCIR login successful"
+      LOGIN_RC=$?
+      set -e
+
+      if [ $LOGIN_RC -eq 0 ]; then
+        echo "✅ OCIR login successful"
+      else
+        echo "⚠️ OCIR login failed (exit code: $LOGIN_RC)"
+        echo "   This is non-fatal - continuing with instance setup"
+        echo "   If you need OCIR access, verify your credentials:"
+        echo "   - OCIR_REGION: ${ocir_region}"
+        echo "   - OCIR_USERNAME format should be: namespace/oracleidentitycloudservice/email"
+        echo "   - OCIR_AUTH_TOKEN must be a valid auth token (not API key)"
+        journalctl -u docker -n 50 || true
+      fi
 
       # Create .env file for application
       cat > /home/ubuntu/payment-service/.env <<EOF
