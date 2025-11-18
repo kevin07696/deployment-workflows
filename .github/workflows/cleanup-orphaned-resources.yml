@@ -1,0 +1,305 @@
+name: Cleanup Orphaned Oracle Cloud Resources
+
+on:
+  # Run daily at 2 AM UTC (after most development activity)
+  schedule:
+    - cron: '0 2 * * *'
+
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      environment:
+        required: false
+        type: choice
+        options:
+          - all
+          - staging
+          - production
+        default: 'all'
+        description: 'Environment to clean up (all, staging, or production)'
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+        description: 'Dry run - only report what would be deleted'
+
+jobs:
+  cleanup:
+    name: Cleanup Orphaned Resources
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure Oracle Cloud credentials
+        run: |
+          mkdir -p ~/.oci
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+      - name: Install OCI CLI
+        run: |
+          echo "📦 Installing OCI CLI..."
+          bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)" -- --accept-all-defaults
+
+          echo "$HOME/bin" >> $GITHUB_PATH
+          export PATH="$HOME/bin:$PATH"
+
+          echo "✅ OCI CLI installed: $(oci --version)"
+
+      - name: Verify OCI Authentication
+        run: |
+          echo "🔍 Verifying OCI authentication..."
+          if $HOME/bin/oci iam region list --output table >/dev/null 2>&1; then
+            echo "✅ OCI authentication successful"
+          else
+            echo "❌ OCI authentication failed"
+            exit 1
+          fi
+
+      - name: Find and Report Orphaned Resources
+        id: find
+        run: |
+          echo "🔍 Scanning for orphaned Oracle Cloud resources..."
+          echo ""
+
+          # Determine which environments to check
+          ENV_PATTERN="${{ github.event.inputs.environment || 'all' }}"
+          if [ "$ENV_PATTERN" = "all" ]; then
+            SEARCH_PATTERN="payment-"
+          else
+            SEARCH_PATTERN="payment-${ENV_PATTERN}"
+          fi
+
+          echo "🎯 Searching for resources matching: $SEARCH_PATTERN"
+          echo ""
+
+          # Find orphaned databases
+          echo "=== Orphaned Autonomous Databases ==="
+          DB_LIST=$(oci db autonomous-database list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --all | \
+            jq -r --arg pattern "$SEARCH_PATTERN" '.data[]? |
+              select(."display-name" | contains($pattern)) |
+              select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "PROVISIONING") |
+              "\(.id)|\(."display-name")|\(."lifecycle-state")|\(."time-created")"')
+
+          if [ -n "$DB_LIST" ]; then
+            echo "Found orphaned databases:"
+            echo "$DB_LIST" | while IFS='|' read -r id name state created; do
+              echo "  📊 $name"
+              echo "     ID: $id"
+              echo "     State: $state"
+              echo "     Created: $created"
+              echo ""
+            done
+            DB_COUNT=$(echo "$DB_LIST" | wc -l)
+          else
+            echo "✅ No orphaned databases found"
+            DB_COUNT=0
+          fi
+          echo "db_count=$DB_COUNT" >> $GITHUB_OUTPUT
+          echo ""
+
+          # Find orphaned compute instances
+          echo "=== Orphaned Compute Instances ==="
+          INSTANCE_LIST=$(oci compute instance list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --all | \
+            jq -r --arg pattern "$SEARCH_PATTERN" '.data[]? |
+              select(."display-name" | contains($pattern)) |
+              select(."lifecycle-state" == "RUNNING" or ."lifecycle-state" == "STARTING") |
+              "\(.id)|\(."display-name")|\(."lifecycle-state")|\(."time-created")"')
+
+          if [ -n "$INSTANCE_LIST" ]; then
+            echo "Found orphaned compute instances:"
+            echo "$INSTANCE_LIST" | while IFS='|' read -r id name state created; do
+              echo "  💻 $name"
+              echo "     ID: $id"
+              echo "     State: $state"
+              echo "     Created: $created"
+              echo ""
+            done
+            INSTANCE_COUNT=$(echo "$INSTANCE_LIST" | wc -l)
+          else
+            echo "✅ No orphaned compute instances found"
+            INSTANCE_COUNT=0
+          fi
+          echo "instance_count=$INSTANCE_COUNT" >> $GITHUB_OUTPUT
+          echo ""
+
+          # Calculate age of resources
+          echo "=== Resource Age Analysis ==="
+          TOTAL_RESOURCES=$((DB_COUNT + INSTANCE_COUNT))
+          if [ $TOTAL_RESOURCES -gt 0 ]; then
+            echo "⚠️  Found $TOTAL_RESOURCES orphaned resource(s)"
+            echo "   - $DB_COUNT database(s)"
+            echo "   - $INSTANCE_COUNT compute instance(s)"
+
+            # Check for resources older than 24 hours
+            CUTOFF_DATE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%S)
+            echo ""
+            echo "🕐 Resources older than 24 hours (created before $CUTOFF_DATE):"
+
+            OLD_COUNT=0
+            if [ -n "$DB_LIST" ]; then
+              echo "$DB_LIST" | while IFS='|' read -r id name state created; do
+                if [[ "$created" < "$CUTOFF_DATE" ]]; then
+                  echo "   - DB: $name (created: $created)"
+                  OLD_COUNT=$((OLD_COUNT + 1))
+                fi
+              done
+            fi
+
+            if [ -n "$INSTANCE_LIST" ]; then
+              echo "$INSTANCE_LIST" | while IFS='|' read -r id name state created; do
+                if [[ "$created" < "$CUTOFF_DATE" ]]; then
+                  echo "   - Instance: $name (created: $created)"
+                  OLD_COUNT=$((OLD_COUNT + 1))
+                fi
+              done
+            fi
+
+            if [ $OLD_COUNT -eq 0 ]; then
+              echo "   ✅ No resources older than 24 hours"
+            fi
+          else
+            echo "✅ No orphaned resources found"
+          fi
+
+          echo "total_resources=$TOTAL_RESOURCES" >> $GITHUB_OUTPUT
+
+      - name: Delete Orphaned Resources
+        if: steps.find.outputs.total_resources > 0 && github.event.inputs.dry_run != 'true'
+        run: |
+          echo "🧹 Deleting orphaned resources..."
+          echo ""
+
+          ENV_PATTERN="${{ github.event.inputs.environment || 'all' }}"
+          if [ "$ENV_PATTERN" = "all" ]; then
+            SEARCH_PATTERN="payment-"
+          else
+            SEARCH_PATTERN="payment-${ENV_PATTERN}"
+          fi
+
+          # Delete orphaned databases
+          if [ "${{ steps.find.outputs.db_count }}" -gt 0 ]; then
+            echo "🗑️  Deleting orphaned databases..."
+            oci db autonomous-database list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+              --all | \
+              jq -r --arg pattern "$SEARCH_PATTERN" '.data[]? |
+                select(."display-name" | contains($pattern)) |
+                select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "PROVISIONING") |
+                .id' | \
+              while read db_id; do
+                echo "  Deleting database: $db_id"
+                oci db autonomous-database delete --autonomous-database-id "$db_id" --force || echo "  ⚠️  Failed to delete $db_id"
+              done
+            echo "✅ Database deletion requests submitted"
+          fi
+
+          # Delete orphaned compute instances
+          if [ "${{ steps.find.outputs.instance_count }}" -gt 0 ]; then
+            echo "🗑️  Terminating orphaned compute instances..."
+            oci compute instance list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+              --all | \
+              jq -r --arg pattern "$SEARCH_PATTERN" '.data[]? |
+                select(."display-name" | contains($pattern)) |
+                select(."lifecycle-state" == "RUNNING" or ."lifecycle-state" == "STARTING") |
+                .id' | \
+              while read instance_id; do
+                echo "  Terminating instance: $instance_id"
+                oci compute instance terminate --instance-id "$instance_id" --force || echo "  ⚠️  Failed to terminate $instance_id"
+              done
+            echo "✅ Instance termination requests submitted"
+          fi
+
+          echo ""
+          echo "⏳ Waiting 30 seconds for deletions to process..."
+          sleep 30
+
+          echo "✅ Cleanup complete"
+
+      - name: Verify Cleanup
+        if: steps.find.outputs.total_resources > 0 && github.event.inputs.dry_run != 'true'
+        run: |
+          echo "🔍 Verifying cleanup..."
+          echo ""
+
+          ENV_PATTERN="${{ github.event.inputs.environment || 'all' }}"
+          if [ "$ENV_PATTERN" = "all" ]; then
+            SEARCH_PATTERN="payment-"
+          else
+            SEARCH_PATTERN="payment-${ENV_PATTERN}"
+          fi
+
+          # Check remaining databases
+          REMAINING_DBS=$(oci db autonomous-database list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --all | \
+            jq -r --arg pattern "$SEARCH_PATTERN" '[.data[]? |
+              select(."display-name" | contains($pattern)) |
+              select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "TERMINATING")] | length')
+
+          # Check remaining instances
+          REMAINING_INSTANCES=$(oci compute instance list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --all | \
+            jq -r --arg pattern "$SEARCH_PATTERN" '[.data[]? |
+              select(."display-name" | contains($pattern)) |
+              select(."lifecycle-state" == "RUNNING" or ."lifecycle-state" == "TERMINATING")] | length')
+
+          TOTAL_REMAINING=$((REMAINING_DBS + REMAINING_INSTANCES))
+
+          if [ $TOTAL_REMAINING -eq 0 ]; then
+            echo "✅ All orphaned resources deleted successfully"
+          else
+            echo "⏳ $TOTAL_REMAINING resource(s) still terminating:"
+            echo "   - $REMAINING_DBS database(s)"
+            echo "   - $REMAINING_INSTANCES instance(s)"
+            echo ""
+            echo "💡 Resources may take several minutes to fully terminate"
+          fi
+
+      - name: Dry Run Summary
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo "🔍 DRY RUN - No resources were deleted"
+          echo ""
+          echo "Would have deleted:"
+          echo "  - ${{ steps.find.outputs.db_count }} database(s)"
+          echo "  - ${{ steps.find.outputs.instance_count }} compute instance(s)"
+          echo ""
+          echo "To actually delete these resources, run without dry_run flag"
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## Orphaned Resource Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment || 'all' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** ${{ github.event.inputs.dry_run == 'true' && 'Dry Run (no deletions)' || 'Live Cleanup' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Resources Found" >> $GITHUB_STEP_SUMMARY
+          echo "- 📊 Databases: ${{ steps.find.outputs.db_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 💻 Compute Instances: ${{ steps.find.outputs.instance_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total:** ${{ steps.find.outputs.total_resources }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.find.outputs.total_resources }}" -eq 0 ]; then
+            echo "✅ No orphaned resources found" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "ℹ️ Dry run completed - no resources were deleted" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ Cleanup completed" >> $GITHUB_STEP_SUMMARY
+          fi
