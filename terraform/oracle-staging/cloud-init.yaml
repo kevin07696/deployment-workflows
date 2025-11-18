@@ -17,148 +17,147 @@ packages:
   - libaio1
   - wget
 
-runcmd:
-  # Install Docker using official Docker repository (more reliable than docker.io package)
-  - |
-    set -euo pipefail
-    echo "📦 Installing Docker from official repository..."
-
-    # Add Docker's official GPG key
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-    chmod a+r /etc/apt/keyrings/docker.asc
-
-    # Add Docker repository
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-    # Update package index with Docker repo
-    apt-get update
-
-    # Install Docker Engine and Docker Compose plugin
-    DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-    echo "✅ Docker packages installed"
-
-  # Enable and start Docker service
-  - systemctl enable docker
-  - systemctl start docker
-
-  # Add ubuntu user to docker group
-  - usermod -aG docker ubuntu
-
-  # Verify Docker installation with retry logic
-  - |
-    echo "🔍 Verifying Docker installation..."
-    for i in $(seq 1 30); do
-      if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
-        echo "✅ Docker installed and running: $(docker --version)"
-        break
-      fi
-      echo "Waiting for Docker to be available... ($i/30)"
-      sleep 2
-    done
-
-    # Final verification
-    if ! docker version >/dev/null 2>&1; then
-      echo "❌ Docker installation failed!"
-      systemctl status docker || true
-      exit 1
-    fi
-
-    # Verify docker compose plugin
-    if docker compose version >/dev/null 2>&1; then
-      echo "✅ Docker Compose plugin available: $(docker compose version)"
-    else
-      echo "❌ Docker Compose plugin not found!"
-      exit 1
-    fi
-
-  # Create application directory
-  - mkdir -p /home/ubuntu/payment-service
-  - chown -R ubuntu:ubuntu /home/ubuntu/payment-service
-
-  # Create Oracle wallet directory
-  - mkdir -p /home/ubuntu/oracle-wallet
-  - chown -R ubuntu:ubuntu /home/ubuntu/oracle-wallet
-
-  # Configure firewall
-  - ufw allow 22/tcp    # SSH
-  - ufw allow 8080/tcp  # gRPC
-  - ufw allow 8081/tcp  # HTTP Cron
-  - ufw --force enable
-
-  # Install Oracle Instant Client (for database migrations and SQL*Plus)
-  - |
-    echo "📦 Installing Oracle Instant Client..."
-    mkdir -p /opt/oracle
-    cd /tmp
-    wget -q https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basic-linux.x64-21.1.0.0.0.zip
-    wget -q https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-sqlplus-linux.x64-21.1.0.0.0.zip
-    unzip -q -o instantclient-basic-linux.x64-21.1.0.0.0.zip -d /opt/oracle/
-    unzip -q -o instantclient-sqlplus-linux.x64-21.1.0.0.0.zip -d /opt/oracle/
-    sh -c "echo /opt/oracle/instantclient_21_1 > /etc/ld.so.conf.d/oracle-instantclient.conf"
-    ldconfig
-    rm -f instantclient-*.zip
-    echo "✅ Oracle Instant Client installed"
-
-  # Login to Oracle Container Registry (OCIR)
-  # This persists Docker credentials so deployment can pull images
-  - |
-    echo "🔐 Logging into Oracle Container Registry..."
-    echo "${ocir_auth_token}" | docker login ${ocir_region}.ocir.io \
-      -u "${ocir_username}" \
-      --password-stdin
-    echo "✅ OCIR login successful"
-
-  # Create .env file for application
-  - |
-    cat > /home/ubuntu/payment-service/.env <<EOF
-    # Environment
-    ENVIRONMENT=${environment}
-
-    # Oracle Container Registry (OCIR)
-    OCIR_REGION=${ocir_region}
-    OCIR_NAMESPACE=${ocir_namespace}
-
-    # Database (Oracle Autonomous Database)
-    DB_HOST=${db_connection_string}
-    DB_PORT=1522
-    DB_USER=${db_user}
-    DB_PASSWORD=${db_password}
-    DB_NAME=paymentdb
-    DB_SSLMODE=require
-    TNS_ADMIN=/home/ubuntu/oracle-wallet
-
-    # Server
-    GRPC_PORT=8080
-    HTTP_PORT=8081
-
-    # EPX Payment Gateway Configuration
-    # Note: Merchant credentials (CUST_NBR, MERCH_NBR, DBA_NBR, TERMINAL_NBR) are
-    # stored per-agent in the database following multi-tenant architecture.
-    # Only the MAC secret for the test merchant is provided here for staging.
-    EPX_SERVER_POST_URL=https://secure.epxuap.com
-    EPX_TIMEOUT=30
-    EPX_TEST_AGENT_MAC=${epx_mac}
-
-    # North Merchant Reporting API
-    NORTH_MERCHANT_REPORTING_URL=https://api.north.com
-    NORTH_TIMEOUT=30
-
-    # Cron Security
-    CRON_SECRET=${cron_secret}
-
-    # Logging
-    LOG_LEVEL=info
-    EOF
-
-  - chown ubuntu:ubuntu /home/ubuntu/payment-service/.env
-  - chmod 600 /home/ubuntu/payment-service/.env
-
-  # Note: Application deployment uses 'docker run' directly (not docker-compose)
-  # The deployment workflow handles container orchestration
-
 write_files:
+  # Docker installation script
+  - path: /var/lib/cloud/scripts/per-boot/01-install-docker.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "📦 Installing Docker from official repository..."
+
+      # Add Docker's official GPG key
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+
+      # Add Docker repository
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+      # Update package index with Docker repo
+      apt-get update
+
+      # Install Docker Engine and Docker Compose plugin
+      DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+      echo "✅ Docker packages installed"
+
+      # Enable and start Docker service
+      systemctl enable docker
+      systemctl start docker
+
+      # Add ubuntu user to docker group
+      usermod -aG docker ubuntu
+
+      # Verify Docker installation with retry logic
+      echo "🔍 Verifying Docker installation..."
+      for i in $(seq 1 30); do
+        if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+          echo "✅ Docker installed and running: $(docker --version)"
+          break
+        fi
+        echo "Waiting for Docker to be available... ($i/30)"
+        sleep 2
+      done
+
+      # Final verification
+      if ! docker version >/dev/null 2>&1; then
+        echo "❌ Docker installation failed!"
+        systemctl status docker || true
+        exit 1
+      fi
+
+      # Verify docker compose plugin
+      if docker compose version >/dev/null 2>&1; then
+        echo "✅ Docker Compose plugin available: $(docker compose version)"
+      else
+        echo "❌ Docker Compose plugin not found!"
+        exit 1
+      fi
+
+  # Oracle Instant Client installation script
+  - path: /var/lib/cloud/scripts/per-boot/02-install-oracle-client.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "📦 Installing Oracle Instant Client..."
+      mkdir -p /opt/oracle
+      cd /tmp
+      wget -q https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basic-linux.x64-21.1.0.0.0.zip
+      wget -q https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-sqlplus-linux.x64-21.1.0.0.0.zip
+      unzip -q -o instantclient-basic-linux.x64-21.1.0.0.0.zip -d /opt/oracle/
+      unzip -q -o instantclient-sqlplus-linux.x64-21.1.0.0.0.zip -d /opt/oracle/
+      sh -c "echo /opt/oracle/instantclient_21_1 > /etc/ld.so.conf.d/oracle-instantclient.conf"
+      ldconfig
+      rm -f instantclient-*.zip
+      echo "✅ Oracle Instant Client installed"
+
+  # Application setup script (OCIR login and .env creation)
+  - path: /var/lib/cloud/scripts/per-boot/03-setup-application.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      # Login to Oracle Container Registry (OCIR)
+      # This persists Docker credentials so deployment can pull images
+      echo "🔐 Logging into Oracle Container Registry..."
+      echo "${ocir_auth_token}" | docker login ${ocir_region}.ocir.io \
+        -u "${ocir_username}" \
+        --password-stdin
+      echo "✅ OCIR login successful"
+
+      # Create .env file for application
+      cat > /home/ubuntu/payment-service/.env <<EOF
+      # Environment
+      ENVIRONMENT=${environment}
+
+      # Oracle Container Registry (OCIR)
+      OCIR_REGION=${ocir_region}
+      OCIR_NAMESPACE=${ocir_namespace}
+
+      # Database (Oracle Autonomous Database)
+      DB_HOST=${db_connection_string}
+      DB_PORT=1522
+      DB_USER=${db_user}
+      DB_PASSWORD=${db_password}
+      DB_NAME=paymentdb
+      DB_SSLMODE=require
+      TNS_ADMIN=/home/ubuntu/oracle-wallet
+
+      # Server
+      GRPC_PORT=8080
+      HTTP_PORT=8081
+
+      # EPX Payment Gateway Configuration
+      # Note: Merchant credentials (CUST_NBR, MERCH_NBR, DBA_NBR, TERMINAL_NBR) are
+      # stored per-agent in the database following multi-tenant architecture.
+      # Only the MAC secret for the test merchant is provided here for staging.
+      EPX_SERVER_POST_URL=https://secure.epxuap.com
+      EPX_TIMEOUT=30
+      EPX_TEST_AGENT_MAC=${epx_mac}
+
+      # North Merchant Reporting API
+      NORTH_MERCHANT_REPORTING_URL=https://api.north.com
+      NORTH_TIMEOUT=30
+
+      # Cron Security
+      CRON_SECRET=${cron_secret}
+
+      # Logging
+      LOG_LEVEL=info
+      EOF
+
+      chown ubuntu:ubuntu /home/ubuntu/payment-service/.env
+      chmod 600 /home/ubuntu/payment-service/.env
+
+  # Message of the Day
   - path: /etc/motd
     content: |
       ==========================================
@@ -176,5 +175,29 @@ write_files:
       ==========================================
     owner: root:root
     permissions: '0644'
+
+runcmd:
+  # Create application directory
+  - mkdir -p /home/ubuntu/payment-service
+  - chown -R ubuntu:ubuntu /home/ubuntu/payment-service
+
+  # Create Oracle wallet directory
+  - mkdir -p /home/ubuntu/oracle-wallet
+  - chown -R ubuntu:ubuntu /home/ubuntu/oracle-wallet
+
+  # Configure firewall
+  - ufw allow 22/tcp    # SSH
+  - ufw allow 8080/tcp  # gRPC
+  - ufw allow 8081/tcp  # HTTP Cron
+  - ufw --force enable
+
+  # Execute provisioning scripts with bash
+  # Scripts are in write_files section above with proper shebangs
+  - ["/bin/bash", "-lc", "/var/lib/cloud/scripts/per-boot/01-install-docker.sh"]
+  - ["/bin/bash", "-lc", "/var/lib/cloud/scripts/per-boot/02-install-oracle-client.sh"]
+  - ["/bin/bash", "-lc", "/var/lib/cloud/scripts/per-boot/03-setup-application.sh"]
+
+  # Note: Application deployment uses 'docker run' directly (not docker-compose)
+  # The deployment workflow handles container orchestration
 
 final_message: "Payment service instance is ready! Deployed in ${environment} environment."
