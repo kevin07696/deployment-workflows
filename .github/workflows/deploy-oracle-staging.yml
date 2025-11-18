@@ -138,18 +138,19 @@ jobs:
               exit 1
             fi
 
-            if ! docker version &> /dev/null; then
+            # Use sudo because group membership from cloud-init requires new login session
+            if ! sudo docker version &> /dev/null; then
               echo "❌ Docker installed but not working!"
               echo "Docker version check failed"
               sudo systemctl status docker || true
               exit 1
             fi
 
-            echo "✅ Docker verified: $(docker --version)"
+            echo "✅ Docker verified: $(sudo docker --version)"
 
-            # Verify docker compose plugin
-            if docker compose version &> /dev/null; then
-              echo "✅ Docker Compose plugin verified: $(docker compose version)"
+            # Verify docker compose plugin (installed as plugin, not standalone command)
+            if sudo docker compose version &> /dev/null; then
+              echo "✅ Docker Compose plugin verified: $(sudo docker compose version)"
             else
               echo "❌ Docker Compose plugin not available!"
               exit 1
@@ -421,9 +422,10 @@ jobs:
               exit 1
             fi
 
-            # Ensure docker-compose is available
-            if ! command -v docker-compose &> /dev/null; then
-              echo "❌ docker-compose not available"
+            # Ensure docker compose plugin is available (not standalone docker-compose)
+            # Use sg to run in docker group context since SSH session doesn't have group membership yet
+            if ! sg docker -c "docker compose version" &> /dev/null; then
+              echo "❌ docker compose plugin not available"
               exit 1
             fi
 
