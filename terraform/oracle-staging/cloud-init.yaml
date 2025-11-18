@@ -130,7 +130,13 @@ write_files:
         journalctl -u docker -n 50 || true
       fi
 
+      # Create application directory if it doesn't exist
+      echo "📁 Creating application directory..."
+      mkdir -p /home/ubuntu/payment-service
+      chown ubuntu:ubuntu /home/ubuntu/payment-service
+
       # Create .env file for application
+      echo "📝 Creating .env configuration file..."
       cat > /home/ubuntu/payment-service/.env <<EOF
       # Environment
       ENVIRONMENT=${environment}
