@@ -47,6 +47,16 @@ on:
         required: true
       ORACLE_DB_ADMIN_PASSWORD:
         required: true
+      EPX_MAC_STAGING:
+        required: true
+      EPX_CUST_NBR:
+        required: true
+      EPX_MERCH_NBR:
+        required: true
+      EPX_DBA_NBR:
+        required: true
+      EPX_TERMINAL_NBR:
+        required: true
 
 jobs:
   migrate:
@@ -407,22 +417,62 @@ jobs:
               --password-stdin
 
             echo "📥 Pulling latest Docker image..."
-            docker pull ${{ secrets.OCIR_REGION }}.ocir.io/${{ secrets.OCIR_TENANCY_NAMESPACE }}/${{ inputs.service-name }}:${{ inputs.image-tag }}
+            IMAGE_URL="${{ secrets.OCIR_REGION }}.ocir.io/${{ secrets.OCIR_TENANCY_NAMESPACE }}/${{ inputs.service-name }}:${{ inputs.image-tag }}"
+            docker pull "$IMAGE_URL"
 
-            echo "🛑 Stopping existing container..."
-            docker-compose -f ~/payment-service/docker-compose.yml down || true
+            echo "🛑 Stopping and removing existing container..."
+            docker stop payment-server 2>/dev/null || true
+            docker rm payment-server 2>/dev/null || true
 
             echo "🚀 Starting new container..."
-            cd ~/payment-service
-            docker-compose up -d
+            docker run -d \
+              --name payment-server \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              -p 8081:8081 \
+              -e PORT=8080 \
+              -e HTTP_PORT=8081 \
+              -e DB_HOST=${{ inputs.db-host }} \
+              -e DB_PORT=${{ inputs.db-port }} \
+              -e DB_USER=${{ inputs.db-user }} \
+              -e DB_PASSWORD=${{ secrets.ORACLE_DB_PASSWORD }} \
+              -e DB_NAME=ADMIN \
+              -e DB_SERVICE_NAME=${{ inputs.db-service-name }}_high \
+              -e EPX_SERVER_POST_URL=https://certapia.paygateway.com/cgi-bin/dbs/cert_sim.cgi \
+              -e EPX_KEY_EXCHANGE_URL=https://certapia.paygateway.com/cgi-bin/dbs/cert_sim.cgi \
+              -e EPX_BROWSER_POST_URL=https://certapia.paygateway.com/cgi-bin/dbs/cert_sim.cgi \
+              -e EPX_TIMEOUT=30 \
+              -e EPX_CUST_NBR=${{ secrets.EPX_CUST_NBR }} \
+              -e EPX_MERCH_NBR=${{ secrets.EPX_MERCH_NBR }} \
+              -e EPX_DBA_NBR=${{ secrets.EPX_DBA_NBR }} \
+              -e EPX_TERMINAL_NBR=${{ secrets.EPX_TERMINAL_NBR }} \
+              -e EPX_MAC=${{ secrets.EPX_MAC_STAGING }} \
+              -e NORTH_API_URL=https://api.north.com \
+              -e NORTH_TIMEOUT=30 \
+              -e CRON_SECRET=staging-cron-secret \
+              -e ENVIRONMENT=staging \
+              -e SECRET_MANAGER=mock \
+              -e SECRET_CACHE_TTL_MINUTES=5 \
+              "$IMAGE_URL"
 
-            echo "⏳ Waiting for health check..."
-            sleep 10
+            echo "⏳ Waiting for service to start..."
+            sleep 15
 
             echo "🏥 Checking health..."
-            curl -f http://localhost:8081/cron/health || exit 1
+            MAX_ATTEMPTS=30
+            for i in $(seq 1 $MAX_ATTEMPTS); do
+              if curl -f http://localhost:8081/cron/health 2>/dev/null; then
+                echo "✅ Health check passed!"
+                exit 0
+              fi
+              echo "Attempt $i/$MAX_ATTEMPTS - Service not ready yet, waiting 2s..."
+              sleep 2
+            done
 
-            echo "✅ Deployment successful!"
+            echo "❌ Health check failed after $MAX_ATTEMPTS attempts"
+            echo "Container logs:"
+            docker logs payment-server
+            exit 1
 
       - name: Verify Deployment
         run: |
