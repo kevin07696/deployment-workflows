@@ -222,21 +222,8 @@ jobs:
             export PATH=/opt/oracle/instantclient_21_1:$PATH
             export TNS_ADMIN=/home/ubuntu/oracle-wallet
 
-            # Test TNS name resolution
-            echo "Testing TNS name resolution for ${{ inputs.db-service-name }}_high..."
-            if ! tnsping ${{ inputs.db-service-name }}_high 3; then
-              echo "❌ ERROR: Cannot resolve TNS name!"
-              echo "TNS_ADMIN contents:"
-              ls -la $TNS_ADMIN/
-              echo "tnsnames.ora contents:"
-              cat $TNS_ADMIN/tnsnames.ora
-              exit 1
-            fi
-
-            echo "✅ TNS name resolution successful"
-
-            # Test database connectivity with ADMIN user
-            echo "Testing database connection..."
+            # Test database connectivity with ADMIN user (this also validates TNS resolution)
+            echo "Testing database connection and TNS resolution..."
             if ! echo "SELECT 'Connection successful' FROM DUAL;" | sqlplus -L -S ADMIN/${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}@${{ inputs.db-service-name }}_high > /dev/null 2>&1; then
               echo "❌ ERROR: Cannot connect to database!"
               echo "Connection string: ADMIN/***@${{ inputs.db-service-name }}_high"
