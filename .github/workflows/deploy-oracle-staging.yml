@@ -171,27 +171,80 @@ jobs:
             # Set wallet file permissions (readable by owner)
             chmod 644 /home/ubuntu/oracle-wallet/*
 
+            # Remove ZIP file for security
+            rm -f /home/ubuntu/oracle-wallet.zip
+
+            # Fix sqlnet.ora to use correct wallet path
+            # Oracle wallets contain hardcoded paths that need to be updated
+            echo "Updating sqlnet.ora with correct wallet location..."
+            sed -i 's|WALLET_LOCATION = (SOURCE = (METHOD = file) (METHOD_DATA = (DIRECTORY="[^"]*")))|WALLET_LOCATION = (SOURCE = (METHOD = file) (METHOD_DATA = (DIRECTORY="/home/ubuntu/oracle-wallet")))|g' /home/ubuntu/oracle-wallet/sqlnet.ora
+
+            echo "sqlnet.ora contents:"
+            cat /home/ubuntu/oracle-wallet/sqlnet.ora
+
             # Verify wallet files exist
             echo "Wallet contents:"
             ls -la /home/ubuntu/oracle-wallet/
 
-            # Verify required wallet files are present
-            if [ ! -f /home/ubuntu/oracle-wallet/cwallet.sso ]; then
-              echo "❌ ERROR: cwallet.sso not found!"
+            # Verify required wallet files are present and not empty
+            for file in cwallet.sso tnsnames.ora sqlnet.ora; do
+              if [ ! -f /home/ubuntu/oracle-wallet/$file ]; then
+                echo "❌ ERROR: $file not found!"
+                exit 1
+              fi
+
+              if [ ! -s /home/ubuntu/oracle-wallet/$file ]; then
+                echo "❌ ERROR: $file is empty!"
+                exit 1
+              fi
+            done
+
+            # Verify service name is in tnsnames.ora
+            if ! grep -q "${{ inputs.db-service-name }}" /home/ubuntu/oracle-wallet/tnsnames.ora; then
+              echo "❌ ERROR: Service name ${{ inputs.db-service-name }} not found in tnsnames.ora!"
+              cat /home/ubuntu/oracle-wallet/tnsnames.ora
               exit 1
             fi
 
-            if [ ! -f /home/ubuntu/oracle-wallet/tnsnames.ora ]; then
-              echo "❌ ERROR: tnsnames.ora not found!"
+            echo "✅ Oracle Wallet installed and validated successfully"
+
+      - name: Validate Oracle Wallet Connectivity
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ inputs.oracle-cloud-host }}
+          username: ubuntu
+          key_path: oracle-staging-key
+          script: |
+            echo "🔍 Testing Oracle Wallet connectivity..."
+
+            # Set Oracle environment
+            export LD_LIBRARY_PATH=/opt/oracle/instantclient_21_1:$LD_LIBRARY_PATH
+            export PATH=/opt/oracle/instantclient_21_1:$PATH
+            export TNS_ADMIN=/home/ubuntu/oracle-wallet
+
+            # Test TNS name resolution
+            echo "Testing TNS name resolution for ${{ inputs.db-service-name }}_high..."
+            if ! tnsping ${{ inputs.db-service-name }}_high 3; then
+              echo "❌ ERROR: Cannot resolve TNS name!"
+              echo "TNS_ADMIN contents:"
+              ls -la $TNS_ADMIN/
+              echo "tnsnames.ora contents:"
+              cat $TNS_ADMIN/tnsnames.ora
               exit 1
             fi
 
-            if [ ! -f /home/ubuntu/oracle-wallet/sqlnet.ora ]; then
-              echo "❌ ERROR: sqlnet.ora not found!"
+            echo "✅ TNS name resolution successful"
+
+            # Test database connectivity with ADMIN user
+            echo "Testing database connection..."
+            if ! echo "SELECT 'Connection successful' FROM DUAL;" | sqlplus -L -S ADMIN/${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}@${{ inputs.db-service-name }}_high > /dev/null 2>&1; then
+              echo "❌ ERROR: Cannot connect to database!"
+              echo "Connection string: ADMIN/***@${{ inputs.db-service-name }}_high"
               exit 1
             fi
 
-            echo "✅ Oracle Wallet installed successfully"
+            echo "✅ Database connection successful"
+            echo "✅ Oracle Wallet connectivity validated"
 
       - name: Download Database Init Script
         uses: actions/download-artifact@v4
