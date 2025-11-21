@@ -520,6 +520,57 @@ jobs:
           terraform output -raw github_secrets >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
+      - name: Validate Terraform Outputs
+        if: inputs.action == 'create' && success()
+        working-directory: ${{ inputs.terraform-directory }}
+        run: |
+          echo "🔍 Validating Terraform outputs..."
+
+          ORACLE_HOST=$(terraform output -raw oracle_cloud_host 2>/dev/null || echo "")
+          DB_HOST=$(terraform output -raw database_host 2>/dev/null || echo "")
+          DB_SERVICE=$(terraform output -raw database_service_name 2>/dev/null || echo "")
+
+          echo "oracle_cloud_host: $ORACLE_HOST"
+          echo "database_host: $DB_HOST"
+          echo "database_service_name: $DB_SERVICE"
+
+          # Validate oracle_cloud_host is not empty
+          if [ -z "$ORACLE_HOST" ]; then
+            echo "❌ ERROR: oracle_cloud_host output is empty!"
+            echo "Terraform outputs:"
+            terraform output
+            exit 1
+          fi
+
+          # Validate IP format (basic check)
+          if ! echo "$ORACLE_HOST" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+            echo "❌ ERROR: oracle_cloud_host is not a valid IP: $ORACLE_HOST"
+            exit 1
+          fi
+
+          # Validate database outputs
+          if [ -z "$DB_HOST" ]; then
+            echo "❌ ERROR: database_host output is empty!"
+            terraform output
+            exit 1
+          fi
+
+          if [ -z "$DB_SERVICE" ]; then
+            echo "❌ ERROR: database_service_name output is empty!"
+            terraform output
+            exit 1
+          fi
+
+          # Test network connectivity to the instance
+          echo "Testing network connectivity to $ORACLE_HOST..."
+          if ping -c 3 -W 5 "$ORACLE_HOST" > /dev/null 2>&1; then
+            echo "✅ ICMP: Instance is reachable"
+          else
+            echo "⚠️ WARNING: Cannot ping $ORACLE_HOST (may be normal if ICMP blocked)"
+          fi
+
+          echo "✅ All critical outputs validated successfully"
+
       - name: Save Wallet
         if: inputs.action == 'create' && success()
         uses: actions/upload-artifact@v4
