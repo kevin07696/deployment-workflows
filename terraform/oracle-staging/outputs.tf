@@ -30,18 +30,18 @@ output "database_name" {
 }
 
 output "database_host" {
-  description = "Database connection host (extracted from connection string)"
-  value       = try(regex("([^/]+):(\\d+)/", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], "")
+  description = "Database connection host (extracted from TNS connection string)"
+  value       = try(regex("\\(host=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], "")
 }
 
 output "database_port" {
-  description = "Database connection port"
-  value       = try(regex(":(\\d+)/", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], "1522")
+  description = "Database connection port (extracted from TNS connection string)"
+  value       = try(regex("\\(port=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], "1522")
 }
 
 output "database_service_name" {
-  description = "Database service name (extracted from connection string)"
-  value       = try(regex("/([^?]+)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], oci_database_autonomous_database.payment_db.db_name)
+  description = "Database service name (extracted from TNS connection string)"
+  value       = try(regex("\\(service_name=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], oci_database_autonomous_database.payment_db.db_name)
 }
 
 output "database_wallet_file" {
