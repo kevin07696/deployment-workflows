@@ -31,29 +31,28 @@ output "database_name" {
 
 output "database_host" {
   description = "Database connection host (extracted from TNS connection string)"
-  # Try lowercase first, then uppercase HOST, or use a constructed value
-  value       = try(
-    regex("\\(host=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
-    regex("\\(HOST=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
-    # Fallback: Oracle ADB typically uses regional endpoint
+  # Try extracting from connection string, fallback to regional endpoint
+  value       = coalesce(
+    try(regex("\\(host=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
+    try(regex("\\(HOST=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
     "adb.${var.region}.oraclecloud.com"
   )
 }
 
 output "database_port" {
   description = "Database connection port (extracted from TNS connection string)"
-  value       = try(
-    regex("\\(port=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
-    regex("\\(PORT=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
+  value       = coalesce(
+    try(regex("\\(port=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
+    try(regex("\\(PORT=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
     "1522"
   )
 }
 
 output "database_service_name" {
   description = "Database service name (extracted from TNS connection string)"
-  value       = try(
-    regex("\\(service_name=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
-    regex("\\(SERVICE_NAME=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
+  value       = coalesce(
+    try(regex("\\(service_name=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
+    try(regex("\\(SERVICE_NAME=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
     oci_database_autonomous_database.payment_db.db_name
   )
 }
