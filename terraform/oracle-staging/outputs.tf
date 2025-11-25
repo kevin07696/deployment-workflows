@@ -31,17 +31,31 @@ output "database_name" {
 
 output "database_host" {
   description = "Database connection host (extracted from TNS connection string)"
-  value       = try(regex("\\(host=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], "")
+  # Try lowercase first, then uppercase HOST, or use a constructed value
+  value       = try(
+    regex("\\(host=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
+    regex("\\(HOST=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
+    # Fallback: Oracle ADB typically uses regional endpoint
+    "adb.${var.region}.oraclecloud.com"
+  )
 }
 
 output "database_port" {
   description = "Database connection port (extracted from TNS connection string)"
-  value       = try(regex("\\(port=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], "1522")
+  value       = try(
+    regex("\\(port=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
+    regex("\\(PORT=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
+    "1522"
+  )
 }
 
 output "database_service_name" {
   description = "Database service name (extracted from TNS connection string)"
-  value       = try(regex("\\(service_name=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], oci_database_autonomous_database.payment_db.db_name)
+  value       = try(
+    regex("\\(service_name=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
+    regex("\\(SERVICE_NAME=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0],
+    oci_database_autonomous_database.payment_db.db_name
+  )
 }
 
 output "database_wallet_file" {
