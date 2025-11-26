@@ -15,9 +15,12 @@ packages:
 
 write_files:
   # Application environment config
+  # NOTE: Using defer:true because ubuntu user is created during cloud-init boot
+  # and isn't available when write_files runs in early boot stages
   - path: /home/ubuntu/payment-service/.env
     permissions: '0600'
     owner: ubuntu:ubuntu
+    defer: true
     content: |
       # Environment
       ENVIRONMENT=${environment}
