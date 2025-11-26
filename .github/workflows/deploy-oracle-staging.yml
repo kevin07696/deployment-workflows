@@ -16,22 +16,6 @@ on:
         required: true
         type: string
         description: 'Oracle Cloud host IP (from infrastructure output)'
-      db-host:
-        required: true
-        type: string
-        description: 'Database connection host (from infrastructure output)'
-      db-port:
-        required: true
-        type: string
-        description: 'Database connection port (from infrastructure output)'
-      db-service-name:
-        required: true
-        type: string
-        description: 'Database service name (from infrastructure output)'
-      db-user:
-        required: true
-        type: string
-        description: 'Database user (from infrastructure output)'
     secrets:
       ORACLE_CLOUD_SSH_KEY:
         required: true
@@ -43,9 +27,7 @@ on:
         required: true
       OCIR_AUTH_TOKEN:
         required: true
-      ORACLE_DB_PASSWORD:
-        required: true
-      ORACLE_DB_ADMIN_PASSWORD:
+      DB_PASSWORD:
         required: true
       EPX_MAC_STAGING:
         required: true
@@ -59,8 +41,8 @@ on:
         required: true
 
 jobs:
-  migrate:
-    name: Run Database Migrations
+  deploy:
+    name: Deploy Application with Migrations
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -70,10 +52,6 @@ jobs:
         run: |
           echo "=== Infrastructure Outputs Debug ==="
           echo "oracle-cloud-host: '${{ inputs.oracle-cloud-host }}'"
-          echo "db-host: '${{ inputs.db-host }}'"
-          echo "db-port: '${{ inputs.db-port }}'"
-          echo "db-service-name: '${{ inputs.db-service-name }}'"
-          echo "db-user: '${{ inputs.db-user }}'"
 
           # Critical validation: Ensure oracle-cloud-host is not empty
           if [ -z "${{ inputs.oracle-cloud-host }}" ]; then
@@ -94,7 +72,7 @@ jobs:
           ORACLE_HOST="${{ inputs.oracle-cloud-host }}"
           echo "⏳ Waiting for compute instance SSH to be ready..."
           echo "Target host: $ORACLE_HOST"
-          max_attempts=60  # Increased from 30 to 60 (10 minutes total)
+          max_attempts=60
           attempt=1
 
           # Test basic network connectivity first
@@ -110,7 +88,6 @@ jobs:
 
             if timeout 10 nc -z "$ORACLE_HOST" 22 2>/dev/null; then
               echo "✅ SSH port is open!"
-              # Give SSH daemon a few more seconds to fully initialize
               sleep 10
               echo "✅ SSH is ready for connections"
               exit 0
@@ -121,12 +98,7 @@ jobs:
             attempt=$((attempt + 1))
           done
 
-          echo "❌ SSH did not become ready after $max_attempts attempts ($(($max_attempts * 10 / 60)) minutes)"
-          echo "Target was: $ORACLE_HOST"
-          echo "This suggests either:"
-          echo "  1. Cloud-init is taking longer than expected (>10 minutes)"
-          echo "  2. Network connectivity issues"
-          echo "  3. Firewall blocking SSH"
+          echo "❌ SSH did not become ready after $max_attempts attempts"
           exit 1
 
       - name: Download SSH Private Key
@@ -149,9 +121,8 @@ jobs:
           script: |
             echo "⏳ Waiting for cloud-init to complete..."
 
-            # Wait for cloud-init to finish (max 20 minutes)
-            # Increased timeout to handle Docker installation and Oracle Instant Client
-            if timeout 1200 cloud-init status --wait; then
+            # Wait for cloud-init to finish (max 15 minutes)
+            if timeout 900 cloud-init status --wait; then
               echo "✅ cloud-init completed successfully"
             else
               echo "❌ cloud-init failed or timed out!"
@@ -161,9 +132,6 @@ jobs:
               echo ""
               echo "=== Last 100 lines of cloud-init output ==="
               sudo tail -n 100 /var/log/cloud-init-output.log || true
-              echo ""
-              echo "=== Last 50 lines of cloud-init log ==="
-              sudo tail -n 50 /var/log/cloud-init.log || true
               exit 1
             fi
 
@@ -171,23 +139,33 @@ jobs:
             echo "🔍 Verifying Docker installation..."
             if ! command -v docker &> /dev/null; then
               echo "❌ Docker command not found!"
-              echo "cloud-init may have failed to install Docker"
-              sudo tail -n 100 /var/log/cloud-init-output.log || true
               exit 1
             fi
 
-            # Use sudo because group membership from cloud-init requires new login session
             if ! sudo docker version &> /dev/null; then
               echo "❌ Docker installed but not working!"
-              echo "Docker version check failed"
-              sudo systemctl status docker || true
               exit 1
             fi
 
             echo "✅ Docker verified: $(sudo docker --version)"
 
-            # Note: Using 'docker run' for deployment, not docker-compose
-            # Skip docker compose verification for snap Docker
+            # Verify PostgreSQL container is running
+            echo "🔍 Verifying PostgreSQL container..."
+            if ! sudo docker ps | grep -q payment-db; then
+              echo "❌ PostgreSQL container not running!"
+              sudo docker ps -a
+              exit 1
+            fi
+
+            # Wait for PostgreSQL to be ready
+            for i in $(seq 1 30); do
+              if sudo docker exec payment-db pg_isready -U payment_service > /dev/null 2>&1; then
+                echo "✅ PostgreSQL is ready"
+                break
+              fi
+              echo "Waiting for PostgreSQL... ($i/30)"
+              sleep 2
+            done
 
             # Verify application directory exists
             if [ ! -d ~/payment-service ]; then
@@ -196,220 +174,6 @@ jobs:
             fi
 
             echo "✅ All verifications passed - instance ready for deployment"
-
-      - name: Download Oracle Wallet
-        uses: actions/download-artifact@v4
-        with:
-          name: oracle-wallet-staging
-          path: .
-
-      - name: Upload Oracle Wallet to Compute Instance
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ inputs.oracle-cloud-host }}
-          username: ubuntu
-          key_path: oracle-staging-key
-          source: oracle-wallet.zip
-          target: /home/ubuntu/
-
-      - name: Install Oracle Wallet
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ inputs.oracle-cloud-host }}
-          username: ubuntu
-          key_path: oracle-staging-key
-          script: |
-            echo "📦 Installing Oracle Wallet..."
-
-            # Remove existing wallet directory if present
-            rm -rf /home/ubuntu/oracle-wallet
-
-            # Create wallet directory
-            mkdir -p /home/ubuntu/oracle-wallet
-
-            # Unzip wallet
-            cd /home/ubuntu
-            unzip -o oracle-wallet.zip -d /home/ubuntu/oracle-wallet/
-
-            # Set proper ownership
-            chown -R ubuntu:ubuntu /home/ubuntu/oracle-wallet
-
-            # Set directory permissions (need execute to cd into it)
-            chmod 755 /home/ubuntu/oracle-wallet
-
-            # Set wallet file permissions (readable by owner)
-            chmod 644 /home/ubuntu/oracle-wallet/*
-
-            # Remove ZIP file for security
-            rm -f /home/ubuntu/oracle-wallet.zip
-
-            # Fix sqlnet.ora to use correct wallet path
-            # Oracle wallets contain hardcoded paths that need to be updated
-            echo "Updating sqlnet.ora with correct wallet location..."
-            sed -i 's|WALLET_LOCATION = (SOURCE = (METHOD = file) (METHOD_DATA = (DIRECTORY="[^"]*")))|WALLET_LOCATION = (SOURCE = (METHOD = file) (METHOD_DATA = (DIRECTORY="/home/ubuntu/oracle-wallet")))|g' /home/ubuntu/oracle-wallet/sqlnet.ora
-
-            echo "sqlnet.ora contents:"
-            cat /home/ubuntu/oracle-wallet/sqlnet.ora
-
-            # Verify wallet files exist
-            echo "Wallet contents:"
-            ls -la /home/ubuntu/oracle-wallet/
-
-            # Verify required wallet files are present and not empty
-            for file in cwallet.sso tnsnames.ora sqlnet.ora; do
-              if [ ! -f /home/ubuntu/oracle-wallet/$file ]; then
-                echo "❌ ERROR: $file not found!"
-                exit 1
-              fi
-
-              if [ ! -s /home/ubuntu/oracle-wallet/$file ]; then
-                echo "❌ ERROR: $file is empty!"
-                exit 1
-              fi
-            done
-
-            # Verify service name is in tnsnames.ora
-            if ! grep -q "${{ inputs.db-service-name }}" /home/ubuntu/oracle-wallet/tnsnames.ora; then
-              echo "❌ ERROR: Service name ${{ inputs.db-service-name }} not found in tnsnames.ora!"
-              cat /home/ubuntu/oracle-wallet/tnsnames.ora
-              exit 1
-            fi
-
-            echo "✅ Oracle Wallet installed and validated successfully"
-
-      - name: Validate Oracle Wallet Connectivity
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ inputs.oracle-cloud-host }}
-          username: ubuntu
-          key_path: oracle-staging-key
-          script: |
-            echo "🔍 Testing Oracle Wallet connectivity..."
-
-            # Set Oracle environment
-            export LD_LIBRARY_PATH=/opt/oracle/instantclient_21_1:$LD_LIBRARY_PATH
-            export PATH=/opt/oracle/instantclient_21_1:$PATH
-            export TNS_ADMIN=/home/ubuntu/oracle-wallet
-
-            # Test database connectivity with ADMIN user (this also validates TNS resolution)
-            echo "Testing database connection and TNS resolution..."
-            if ! echo "SELECT 'Connection successful' FROM DUAL;" | sqlplus -L -S ADMIN/${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}@${{ inputs.db-service-name }}_high > /dev/null 2>&1; then
-              echo "❌ ERROR: Cannot connect to database!"
-              echo "Connection string: ADMIN/***@${{ inputs.db-service-name }}_high"
-              exit 1
-            fi
-
-            echo "✅ Database connection successful"
-            echo "✅ Oracle Wallet connectivity validated"
-
-      - name: Download Database Init Script
-        uses: actions/download-artifact@v4
-        with:
-          name: db-init-script-staging
-          path: .
-
-      - name: Upload Database Init Script to Compute Instance
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ inputs.oracle-cloud-host }}
-          username: ubuntu
-          key_path: oracle-staging-key
-          source: init_db.sql
-          target: /home/ubuntu/
-
-      - name: Initialize Database User
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ inputs.oracle-cloud-host }}
-          username: ubuntu
-          key_path: oracle-staging-key
-          script: |
-            echo "👤 Initializing database user..."
-
-            # Oracle Instant Client is pre-installed by cloud-init
-            # Set Oracle environment variables
-            export LD_LIBRARY_PATH=/opt/oracle/instantclient_21_1:$LD_LIBRARY_PATH
-            export PATH=/opt/oracle/instantclient_21_1:$PATH
-            export TNS_ADMIN=/home/ubuntu/oracle-wallet
-
-            # Connect as ADMIN and run init script
-            # Using ADMIN user to create application user
-            ADMIN_CONN_STRING="ADMIN/${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}@${{ inputs.db-service-name }}_high"
-
-            echo "Creating application user if not exists..."
-            sqlplus -S "$ADMIN_CONN_STRING" @/home/ubuntu/init_db.sql
-
-            echo "✅ Database user initialized successfully"
-
-      - name: Run Migrations via SSH
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ inputs.oracle-cloud-host }}
-          username: ubuntu
-          key_path: oracle-staging-key
-          script: |
-            echo "🔄 Running database migrations on Oracle Autonomous Database..."
-
-            # Ensure migrations directory exists
-            mkdir -p ~/migrations
-
-            # Clone or update repository to get latest migrations
-            if [ ! -d ~/payment-service-repo ]; then
-              git clone https://github.com/${{ github.repository }}.git ~/payment-service-repo
-            else
-              cd ~/payment-service-repo && git pull origin ${{ github.ref_name }}
-            fi
-
-            # Copy migrations and seeds to local directories
-            cp -r ~/payment-service-repo/internal/db/migrations/* ~/migrations/ 2>/dev/null || echo "No migrations to copy"
-
-            # Copy seed data for staging
-            mkdir -p ~/seeds
-            cp -r ~/payment-service-repo/internal/db/seeds/staging/* ~/seeds/ 2>/dev/null || echo "No seeds to copy"
-
-            # Oracle Instant Client is pre-installed by cloud-init
-            # Set Oracle environment variables
-            export LD_LIBRARY_PATH=/opt/oracle/instantclient_21_1:$LD_LIBRARY_PATH
-            export PATH=/opt/oracle/instantclient_21_1:$PATH
-            export TNS_ADMIN=/home/ubuntu/oracle-wallet
-
-            # Build connection string for Oracle (not PostgreSQL!)
-            # Oracle connection format: user/password@//host:port/service_name
-            DB_CONN_STRING="${{ inputs.db-user }}/${{ secrets.ORACLE_DB_PASSWORD }}@${{ inputs.db-service-name }}_high"
-
-            # Run migrations using SQL*Plus
-            cd ~/migrations
-            echo "Running migrations..."
-            for migration_file in $(ls *.sql | sort); do
-              echo "  - Applying migration: $migration_file"
-              # Extract only the "Up" section from goose migration files
-              sed -n '/-- +goose Up/,/-- +goose Down/p' "$migration_file" | \
-                sed '/-- +goose Down/d' | \
-                sqlplus -S "$DB_CONN_STRING" @/dev/stdin
-            done
-
-            echo "✅ Migrations completed successfully"
-
-            # Run seed data for staging environment
-            echo "🌱 Seeding staging database..."
-            cd ~/seeds
-            if [ -n "$(ls -A *.sql 2>/dev/null)" ]; then
-              for seed_file in $(ls *.sql | sort); do
-                echo "  - Applying seed: $seed_file"
-                sqlplus -S "$DB_CONN_STRING" @"$seed_file"
-              done
-              echo "✅ Database seeding completed successfully"
-            else
-              echo "No seed files found, skipping seeding"
-            fi
-
-  deploy:
-    name: Deploy Application
-    needs: migrate
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
       - name: Login to Oracle Container Registry (OCIR)
         run: |
@@ -431,32 +195,38 @@ jobs:
 
           echo "✅ Image pushed successfully"
 
-      - name: Download SSH Private Key
-        uses: actions/download-artifact@v4
-        with:
-          name: oracle-ssh-key-staging
-          path: .
-
-      - name: Set SSH Key Permissions
-        run: chmod 600 oracle-staging-key
-
-      - name: Verify Environment
+      - name: Run Database Migrations
         uses: appleboy/ssh-action@master
         with:
           host: ${{ inputs.oracle-cloud-host }}
           username: ubuntu
           key_path: oracle-staging-key
           script: |
-            echo "🔍 Verifying deployment environment..."
+            echo "🔄 Running database migrations..."
 
-            # Ensure Docker is available (with snap Docker, use sudo)
-            if ! sudo docker version &> /dev/null; then
-              echo "❌ Docker not available or not working"
-              exit 1
+            # Clone or update repository to get latest migrations
+            if [ ! -d ~/payment-service-repo ]; then
+              git clone https://github.com/${{ github.repository }}.git ~/payment-service-repo
+            else
+              cd ~/payment-service-repo && git fetch origin && git reset --hard origin/${{ github.ref_name }}
             fi
 
-            echo "✅ Docker ready: $(sudo docker --version)"
-            echo "✅ Environment ready for deployment"
+            # Install goose if not present
+            if ! command -v goose &> /dev/null; then
+              echo "Installing goose..."
+              curl -fsSL https://raw.githubusercontent.com/pressly/goose/master/install.sh | sh
+              sudo mv goose /usr/local/bin/
+            fi
+
+            # Build PostgreSQL connection string
+            DATABASE_URL="postgres://payment_service:${{ secrets.DB_PASSWORD }}@localhost:5432/payment_service?sslmode=disable"
+
+            # Run migrations
+            cd ~/payment-service-repo/internal/db/migrations
+            echo "Running goose migrations..."
+            goose -dir . postgres "$DATABASE_URL" up
+
+            echo "✅ Migrations completed successfully"
 
       - name: Deploy to Oracle Compute Instance
         uses: appleboy/ssh-action@master
@@ -481,17 +251,18 @@ jobs:
             echo "🚀 Starting new container..."
             sudo docker run -d \
               --name payment-server \
+              --network payment-network \
               --restart unless-stopped \
               -p 8080:8080 \
               -p 8081:8081 \
               -e PORT=8080 \
               -e HTTP_PORT=8081 \
-              -e DB_HOST=${{ inputs.db-host }} \
-              -e DB_PORT=${{ inputs.db-port }} \
-              -e DB_USER=${{ inputs.db-user }} \
-              -e DB_PASSWORD=${{ secrets.ORACLE_DB_PASSWORD }} \
-              -e DB_NAME=ADMIN \
-              -e DB_SERVICE_NAME=${{ inputs.db-service-name }}_high \
+              -e DB_HOST=payment-db \
+              -e DB_PORT=5432 \
+              -e DB_USER=payment_service \
+              -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+              -e DB_NAME=payment_service \
+              -e DB_SSLMODE=disable \
               -e EPX_SERVER_POST_URL=https://certapia.paygateway.com/cgi-bin/dbs/cert_sim.cgi \
               -e EPX_KEY_EXCHANGE_URL=https://certapia.paygateway.com/cgi-bin/dbs/cert_sim.cgi \
               -e EPX_BROWSER_POST_URL=https://certapia.paygateway.com/cgi-bin/dbs/cert_sim.cgi \

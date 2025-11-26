@@ -43,16 +43,14 @@ resource "oci_core_instance" "payment_instance" {
   metadata = {
     ssh_authorized_keys = coalesce(var.ssh_public_key, tls_private_key.ssh_key.public_key_openssh)
     user_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
-      db_connection_string = oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value
-      db_user              = var.db_app_user
-      db_password          = var.db_app_password
-      epx_mac              = var.epx_mac
-      cron_secret          = var.cron_secret
-      environment          = var.environment
-      ocir_region          = var.ocir_region
-      ocir_namespace       = var.ocir_namespace
-      ocir_username        = var.ocir_username
-      ocir_auth_token      = var.ocir_auth_token
+      db_password     = local.db_password
+      epx_mac         = var.epx_mac
+      cron_secret     = var.cron_secret
+      environment     = var.environment
+      ocir_region     = var.ocir_region
+      ocir_namespace  = var.ocir_namespace
+      ocir_username   = var.ocir_username
+      ocir_auth_token = var.ocir_auth_token
     }))
   }
 

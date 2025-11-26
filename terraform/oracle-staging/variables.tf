@@ -66,37 +66,7 @@ variable "instance_boot_volume_size_gb" {
 # ===================================
 # DATABASE CONFIGURATION
 # ===================================
-
-variable "db_admin_password" {
-  description = "Autonomous Database admin password"
-  type        = string
-  sensitive   = true
-
-  validation {
-    condition     = length(var.db_admin_password) >= 12 && length(var.db_admin_password) <= 30
-    error_message = "Password must be between 12 and 30 characters long."
-  }
-
-  validation {
-    condition     = can(regex("[A-Z]", var.db_admin_password))
-    error_message = "Password must contain at least one uppercase letter."
-  }
-
-  validation {
-    condition     = can(regex("[a-z]", var.db_admin_password))
-    error_message = "Password must contain at least one lowercase letter."
-  }
-
-  validation {
-    condition     = can(regex("[0-9]", var.db_admin_password))
-    error_message = "Password must contain at least one numeric character."
-  }
-
-  validation {
-    condition     = !can(regex("\"", var.db_admin_password))
-    error_message = "Password cannot contain double quote (\") character."
-  }
-}
+# PostgreSQL runs as container on compute instance
 
 variable "db_app_user" {
   description = "Application database user"
@@ -105,24 +75,10 @@ variable "db_app_user" {
 }
 
 variable "db_app_password" {
-  description = "Application database password"
+  description = "Application database password (optional - auto-generated if not provided)"
   type        = string
   sensitive   = true
-
-  validation {
-    condition     = length(var.db_app_password) >= 12 && length(var.db_app_password) <= 30
-    error_message = "Password must be between 12 and 30 characters long."
-  }
-
-  validation {
-    condition     = can(regex("[A-Z]", var.db_app_password)) && can(regex("[a-z]", var.db_app_password)) && can(regex("[0-9]", var.db_app_password))
-    error_message = "Password must contain uppercase, lowercase, and numeric characters."
-  }
-
-  validation {
-    condition     = !can(regex("\"", var.db_app_password))
-    error_message = "Password cannot contain double quote (\") character."
-  }
+  default     = ""
 }
 
 # ===================================

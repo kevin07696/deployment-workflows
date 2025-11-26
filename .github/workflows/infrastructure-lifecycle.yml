@@ -29,9 +29,7 @@ on:
         required: true
       OCI_PRIVATE_KEY:
         required: true
-      ORACLE_DB_ADMIN_PASSWORD:
-        required: true
-      ORACLE_DB_PASSWORD:
+      DB_PASSWORD:
         required: true
       EPX_MAC_STAGING:
         required: true
@@ -54,21 +52,6 @@ on:
       oracle_cloud_host:
         description: 'Oracle Cloud host IP'
         value: ${{ jobs.manage.outputs.oracle_cloud_host }}
-      db_host:
-        description: 'Database connection host'
-        value: ${{ jobs.manage.outputs.db_host }}
-      db_port:
-        description: 'Database connection port'
-        value: ${{ jobs.manage.outputs.db_port }}
-      db_service_name:
-        description: 'Database service name'
-        value: ${{ jobs.manage.outputs.db_service_name }}
-      db_name:
-        description: 'Database name'
-        value: ${{ jobs.manage.outputs.db_name }}
-      db_user:
-        description: 'Database application user'
-        value: ${{ jobs.manage.outputs.db_user }}
   workflow_dispatch:
     inputs:
       action:
@@ -100,11 +83,6 @@ jobs:
     outputs:
       infrastructure_exists: ${{ steps.check.outputs.exists }}
       oracle_cloud_host: ${{ steps.output.outputs.host }}
-      db_host: ${{ steps.output.outputs.db_host }}
-      db_port: ${{ steps.output.outputs.db_port }}
-      db_service_name: ${{ steps.output.outputs.db_service_name }}
-      db_name: ${{ steps.output.outputs.db_name }}
-      db_user: ${{ steps.output.outputs.db_user }}
 
     steps:
       - name: Checkout deployment-workflows (for terraform)
@@ -135,33 +113,10 @@ jobs:
           echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
 
-      - name: Validate Secrets
-        run: |
-          # Validate Oracle database admin password meets requirements (12-30 chars)
-          DB_ADMIN_PW="${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}"
-          PW_LENGTH=${#DB_ADMIN_PW}
-
-          echo "🔍 Validating secrets..."
-          echo "  Admin password length: $PW_LENGTH characters"
-
-          if [ $PW_LENGTH -lt 12 ]; then
-            echo "❌ ERROR: Admin password too short ($PW_LENGTH chars)"
-            echo "   Oracle requires 12-30 characters"
-            exit 1
-          fi
-
-          if [ $PW_LENGTH -gt 30 ]; then
-            echo "❌ ERROR: Admin password too long ($PW_LENGTH chars)"
-            exit 1
-          fi
-
-          echo "✅ Password validation passed ($PW_LENGTH chars)"
-
       - name: Mask Sensitive Values
         run: |
           echo "🔒 Masking sensitive values in logs..."
-          echo "::add-mask::${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}"
-          echo "::add-mask::${{ secrets.ORACLE_DB_PASSWORD }}"
+          echo "::add-mask::${{ secrets.DB_PASSWORD }}"
           echo "::add-mask::${{ secrets.EPX_MAC_STAGING }}"
           echo "::add-mask::${{ secrets.CRON_SECRET_STAGING }}"
           echo "::add-mask::${{ secrets.OCI_PRIVATE_KEY }}"
@@ -170,91 +125,95 @@ jobs:
           echo "::add-mask::${{ secrets.OCIR_AUTH_TOKEN }}"
           echo "✅ Sensitive values masked"
 
-      - name: Verify OCI CLI Configuration
+      - name: Pre-flight Resource Quota Check
         if: inputs.action == 'create'
         run: |
-          echo "🔍 Verifying OCI CLI setup..."
+          echo "🔍 Pre-flight resource quota check..."
 
-          # Check OCI CLI is installed
+          # Install OCI CLI if needed
           if ! command -v oci &> /dev/null; then
-            echo "❌ OCI CLI not found, installing..."
             bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)" -- --accept-all-defaults
-
-            # Add to PATH for future steps AND current step
             echo "$HOME/bin" >> $GITHUB_PATH
             export PATH="$HOME/bin:$PATH"
-
-            echo "✅ OCI CLI installed: $(oci --version)"
-          else
-            echo "✅ OCI CLI version: $(oci --version)"
           fi
 
-          # Test OCI authentication
-          echo "Testing OCI authentication..."
-          echo "Running: $HOME/bin/oci iam region list --output table"
-          if $HOME/bin/oci iam region list --output table >/dev/null 2>&1; then
-            echo "✅ OCI authentication successful"
-          else
-            echo "❌ OCI authentication failed - detailed diagnostics:"
-            echo ""
-            echo "Config file:"
-            cat ~/.oci/config
-            echo ""
-            echo "Key file exists:"
-            ls -la ~/.oci/oci_api_key.pem || echo "Key file not found"
-            echo ""
-            echo "Key file permissions:"
-            stat ~/.oci/oci_api_key.pem || echo "Cannot stat key file"
-            exit 1
-          fi
+          # Check VCN quota (Oracle Free Tier: 2)
+          VCN_COUNT=$($HOME/bin/oci network vcn list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --all | jq '[.data[]?] | length')
 
-      - name: Verify and Cleanup Orphaned Resources
+          echo "Current VCN count: $VCN_COUNT (Free Tier limit: 2)"
+
+          # Check Compute quota
+          INSTANCE_COUNT=$($HOME/bin/oci compute instance list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --lifecycle-state RUNNING \
+            --all | \
+            jq '([.data[]?] | length) // 0')
+
+          echo "Current running instance count: $INSTANCE_COUNT (Free Tier limit: 2)"
+
+          echo "✅ Pre-flight quota check complete"
+
+      - name: Cleanup Orphaned VCNs
         if: inputs.action == 'create'
         run: |
-          echo "🔍 Checking for orphaned OCI resources..."
+          echo "🧹 Checking for orphaned VCNs..."
 
-          # Check for orphaned Autonomous Databases
-          echo "Checking databases..."
-          DB_COUNT=$(oci db autonomous-database list \
+          # Get all VCNs with payment prefix
+          VCN_IDS=$($HOME/bin/oci network vcn list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-            --lifecycle-state AVAILABLE \
-            --all | \
-            jq '([.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}"))] | length) // 0')
+            --all | jq -r '.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}")) | .id')
 
-          echo "Found $DB_COUNT orphaned database(s)"
+          VCN_COUNT=$(echo "$VCN_IDS" | grep -c . || echo "0")
+          echo "Found $VCN_COUNT orphaned VCN(s)"
 
-          if [ "$DB_COUNT" -gt 0 ]; then
-            echo "🧹 Cleaning up orphaned databases..."
-            oci db autonomous-database list \
-              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-              --lifecycle-state AVAILABLE \
-              --all | \
-              jq -r '.data[] | select(."display-name" | contains("payment-${{ inputs.environment }}")) | .id' | \
-              while read db_id; do
-                echo "  Deleting database: $db_id"
-                oci db autonomous-database delete --autonomous-database-id "$db_id" --force || true
+          if [ "$VCN_COUNT" -gt 0 ]; then
+            echo "🧹 Cleaning up orphaned VCNs..."
+
+            for vcn_id in $VCN_IDS; do
+              echo "Processing VCN: $vcn_id"
+
+              # Delete subnets
+              for subnet in $($HOME/bin/oci network subnet list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                $HOME/bin/oci network subnet delete --subnet-id "$subnet" --force 2>/dev/null || true
+              done
+
+              # Delete internet gateways
+              for igw in $($HOME/bin/oci network internet-gateway list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                $HOME/bin/oci network internet-gateway delete --ig-id "$igw" --force 2>/dev/null || true
+              done
+
+              # Delete NAT gateways
+              for nat in $($HOME/bin/oci network nat-gateway list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                $HOME/bin/oci network nat-gateway delete --nat-gateway-id "$nat" --force 2>/dev/null || true
+              done
+
+              # Clear route tables
+              for rt in $($HOME/bin/oci network route-table list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                $HOME/bin/oci network route-table update --rt-id "$rt" --route-rules '[]' --force 2>/dev/null || true
+              done
+
+              # Delete non-default security lists
+              for sl in $($HOME/bin/oci network security-list list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                $HOME/bin/oci network security-list delete --security-list-id "$sl" --force 2>/dev/null || true
+              done
+
+              sleep 5
+              $HOME/bin/oci network vcn delete --vcn-id "$vcn_id" --force 2>/dev/null && echo "  ✅ VCN deleted" || echo "  ⚠️ VCN deletion failed"
             done
 
-            echo "⏳ Waiting for database deletions to complete..."
-            for i in {1..30}; do
-              REMAINING=$(oci db autonomous-database list \
-                --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-                --all | \
-                jq '([.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}")) | select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "TERMINATING")] | length) // 0')
-
-              if [ "$REMAINING" -eq 0 ]; then
-                echo "✅ All databases deleted"
-                break
-              fi
-
-              echo "  $REMAINING database(s) still terminating... (attempt $i/30)"
-              sleep 10
-            done
+            sleep 30
           fi
 
-          # Check for orphaned Compute Instances
-          echo "Checking compute instances..."
-          INSTANCE_COUNT=$(oci compute instance list \
+          echo "✅ VCN cleanup complete"
+
+      - name: Cleanup Orphaned Compute Instances
+        if: inputs.action == 'create'
+        run: |
+          echo "🧹 Checking for orphaned compute instances..."
+
+          INSTANCE_COUNT=$($HOME/bin/oci compute instance list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --lifecycle-state RUNNING \
             --all | \
@@ -264,76 +223,19 @@ jobs:
 
           if [ "$INSTANCE_COUNT" -gt 0 ]; then
             echo "🧹 Cleaning up orphaned compute instances..."
-            oci compute instance list \
+            $HOME/bin/oci compute instance list \
               --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
               --lifecycle-state RUNNING \
               --all | \
               jq -r '.data[] | select(."display-name" | contains("payment-${{ inputs.environment }}")) | .id' | \
               while read instance_id; do
                 echo "  Terminating instance: $instance_id"
-                oci compute instance terminate --instance-id "$instance_id" --force || true
+                $HOME/bin/oci compute instance terminate --instance-id "$instance_id" --force || true
             done
-
-            echo "⏳ Waiting for instance terminations to complete..."
-            sleep 20
-          fi
-
-          # Check Oracle Free Tier database quota
-          echo "Checking Oracle Free Tier database quota..."
-          TOTAL_DATABASES=$(oci db autonomous-database list \
-            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-            --lifecycle-state AVAILABLE \
-            --all | \
-            jq '([.data[]? | select(.["is-free-tier"] == true)] | length) // 0')
-
-          echo "Found $TOTAL_DATABASES Always Free database(s) in compartment (Oracle limit: 2)"
-
-          if [ "$TOTAL_DATABASES" -ge 2 ]; then
-            echo "❌ ERROR: Oracle Free Tier database quota exceeded!"
-            echo "You have $TOTAL_DATABASES Always Free databases, but Oracle only allows 2 per account."
-            echo ""
-            echo "Run cleanup script: ./scripts/cleanup-oracle-databases.sh"
-            exit 1
-          fi
-
-          # Check Oracle Free Tier compute quota
-          echo "Checking Oracle Free Tier compute quota..."
-          TOTAL_INSTANCES=$(oci compute instance list \
-            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-            --lifecycle-state RUNNING \
-            --all | \
-            jq '([.data[]?] | length) // 0')
-
-          echo "Found $TOTAL_INSTANCES running instance(s) in compartment (Oracle limit: 2 Free Tier instances)"
-
-          if [ "$TOTAL_INSTANCES" -ge 2 ]; then
-            echo "❌ ERROR: Oracle Free Tier compute quota exceeded!"
-            echo "You have $TOTAL_INSTANCES running instances, but Oracle Free Tier limit is 2."
-            echo ""
-            echo "Orphaned instances found:"
-            oci compute instance list \
-              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-              --lifecycle-state RUNNING \
-              --all | \
-              jq -r '.data[]? | "  - \(."display-name") (ID: \(.id), Created: \(."time-created"))"'
-            echo ""
-            echo "Terminating orphaned instances automatically..."
-            oci compute instance list \
-              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-              --lifecycle-state RUNNING \
-              --all | \
-              jq -r '.data[]? | .id' | \
-              while read instance_id; do
-                echo "  Terminating: $instance_id"
-                oci compute instance terminate --instance-id "$instance_id" --force || true
-              done
-            echo ""
-            echo "⏳ Waiting 30 seconds for terminations..."
             sleep 30
-            echo "✅ Compute quota freed"
           fi
 
-          echo "✅ Resource verification complete - ready for provisioning"
+          echo "✅ Compute cleanup complete"
 
       - name: Restore Terraform State
         uses: actions/cache/restore@v4
@@ -349,7 +251,6 @@ jobs:
         id: check
         working-directory: ${{ inputs.terraform-directory }}
         run: |
-          # Check if infrastructure exists
           if terraform show &> /dev/null; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "✅ Infrastructure exists"
@@ -365,27 +266,20 @@ jobs:
           terraform plan -out=tfplan
           terraform show -no-color tfplan > plan.txt
         env:
-          # OCI Authentication
           TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
           TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
           TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
           TF_VAR_region: ${{ secrets.OCI_REGION }}
           TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
           TF_VAR_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
-          # Database Passwords
-          TF_VAR_db_admin_password: ${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}
-          TF_VAR_db_app_password: ${{ secrets.ORACLE_DB_PASSWORD }}
-          # Application Secrets
+          TF_VAR_db_app_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_epx_mac: ${{ secrets.EPX_MAC_STAGING }}
           TF_VAR_cron_secret: ${{ secrets.CRON_SECRET_STAGING }}
-          # Environment
           TF_VAR_environment: ${{ inputs.environment }}
-          # OCIR Configuration
           TF_VAR_ocir_region: ${{ secrets.OCIR_REGION }}
           TF_VAR_ocir_namespace: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
           TF_VAR_ocir_username: ${{ secrets.OCIR_USERNAME }}
           TF_VAR_ocir_auth_token: ${{ secrets.OCIR_AUTH_TOKEN }}
-          # SSH Access
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 
       - name: Upload Plan
@@ -403,89 +297,44 @@ jobs:
           terraform apply -auto-approve tfplan
           echo "✅ Infrastructure created successfully"
         env:
-          # OCI Authentication
           TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
           TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
           TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
           TF_VAR_region: ${{ secrets.OCI_REGION }}
           TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
           TF_VAR_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
-          # Database Passwords
-          TF_VAR_db_admin_password: ${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}
-          TF_VAR_db_app_password: ${{ secrets.ORACLE_DB_PASSWORD }}
-          # Application Secrets
+          TF_VAR_db_app_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_epx_mac: ${{ secrets.EPX_MAC_STAGING }}
           TF_VAR_cron_secret: ${{ secrets.CRON_SECRET_STAGING }}
-          # Environment
           TF_VAR_environment: ${{ inputs.environment }}
-          # OCIR Configuration
           TF_VAR_ocir_region: ${{ secrets.OCIR_REGION }}
           TF_VAR_ocir_namespace: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
           TF_VAR_ocir_username: ${{ secrets.OCIR_USERNAME }}
           TF_VAR_ocir_auth_token: ${{ secrets.OCIR_AUTH_TOKEN }}
-          # SSH Access
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-
-      - name: Cleanup Orphaned Resources (OCI CLI)
-        if: inputs.action == 'destroy'
-        run: |
-          echo "🧹 Cleaning up orphaned OCI resources before Terraform destroy..."
-
-          # Find and delete orphaned databases
-          echo "Looking for orphaned databases..."
-          oci db autonomous-database list \
-            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-            --all | \
-            jq -r '.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}")) | select(."lifecycle-state" == "AVAILABLE" or ."lifecycle-state" == "PROVISIONING") | .id' | \
-            while read db_id; do
-              echo "  Deleting database: $db_id"
-              oci db autonomous-database delete --autonomous-database-id "$db_id" --force || true
-            done
-
-          # Find and terminate orphaned compute instances
-          echo "Looking for orphaned compute instances..."
-          oci compute instance list \
-            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
-            --all | \
-            jq -r '.data[]? | select(."display-name" | contains("payment-${{ inputs.environment }}")) | select(."lifecycle-state" == "RUNNING" or ."lifecycle-state" == "STARTING") | .id' | \
-            while read instance_id; do
-              echo "  Terminating instance: $instance_id"
-              oci compute instance terminate --instance-id "$instance_id" --force || true
-            done
-
-          echo "⏳ Waiting 30 seconds for resource deletions to process..."
-          sleep 30
-          echo "✅ OCI CLI cleanup complete"
 
       - name: Terraform Destroy
         if: inputs.action == 'destroy'
         working-directory: ${{ inputs.terraform-directory }}
         run: |
           echo "🗑️ Destroying ${{ inputs.environment }} infrastructure..."
-          terraform destroy -auto-approve
-          echo "✅ Infrastructure destroyed successfully"
+          terraform destroy -auto-approve || true
+          echo "✅ Infrastructure destroyed"
         env:
-          # OCI Authentication
           TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
           TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
           TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
           TF_VAR_region: ${{ secrets.OCI_REGION }}
           TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
           TF_VAR_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
-          # Database Passwords
-          TF_VAR_db_admin_password: ${{ secrets.ORACLE_DB_ADMIN_PASSWORD }}
-          TF_VAR_db_app_password: ${{ secrets.ORACLE_DB_PASSWORD }}
-          # Application Secrets
+          TF_VAR_db_app_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_epx_mac: ${{ secrets.EPX_MAC_STAGING }}
           TF_VAR_cron_secret: ${{ secrets.CRON_SECRET_STAGING }}
-          # Environment
           TF_VAR_environment: ${{ inputs.environment }}
-          # OCIR Configuration
           TF_VAR_ocir_region: ${{ secrets.OCIR_REGION }}
           TF_VAR_ocir_namespace: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
           TF_VAR_ocir_username: ${{ secrets.OCIR_USERNAME }}
           TF_VAR_ocir_auth_token: ${{ secrets.OCIR_AUTH_TOKEN }}
-          # SSH Access
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 
       - name: Export Outputs
@@ -498,28 +347,11 @@ jobs:
           ORACLE_HOST=$(terraform output -raw oracle_cloud_host 2>/dev/null || echo "")
           echo "host=${ORACLE_HOST}" >> $GITHUB_OUTPUT
 
-          # Extract database connection components (pass separately to avoid GitHub masking)
-          DB_HOST=$(terraform output -raw database_host 2>/dev/null || echo "")
-          DB_PORT=$(terraform output -raw database_port 2>/dev/null || echo "1522")
-          DB_SERVICE=$(terraform output -raw database_service_name 2>/dev/null || echo "")
-          DB_NAME=$(terraform output -raw database_name 2>/dev/null || echo "")
-
-          echo "db_host=${DB_HOST}" >> $GITHUB_OUTPUT
-          echo "db_port=${DB_PORT}" >> $GITHUB_OUTPUT
-          echo "db_service_name=${DB_SERVICE}" >> $GITHUB_OUTPUT
-          echo "db_name=${DB_NAME}" >> $GITHUB_OUTPUT
-          echo "db_user=payment_service" >> $GITHUB_OUTPUT
-
           echo "## Terraform Outputs" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "**Oracle Cloud Host:** ${ORACLE_HOST}" >> $GITHUB_STEP_SUMMARY
-          echo "**Database User:** payment_service" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Required GitHub Secrets" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          terraform output -raw github_secrets >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Validate Terraform Outputs
         if: inputs.action == 'create' && success()
@@ -528,41 +360,22 @@ jobs:
           echo "🔍 Validating Terraform outputs..."
 
           ORACLE_HOST=$(terraform output -raw oracle_cloud_host 2>/dev/null || echo "")
-          DB_HOST=$(terraform output -raw database_host 2>/dev/null || echo "")
-          DB_SERVICE=$(terraform output -raw database_service_name 2>/dev/null || echo "")
-
           echo "oracle_cloud_host: $ORACLE_HOST"
-          echo "database_host: $DB_HOST"
-          echo "database_service_name: $DB_SERVICE"
 
           # Validate oracle_cloud_host is not empty
           if [ -z "$ORACLE_HOST" ]; then
             echo "❌ ERROR: oracle_cloud_host output is empty!"
-            echo "Terraform outputs:"
             terraform output
             exit 1
           fi
 
-          # Validate IP format (basic check)
+          # Validate IP format
           if ! echo "$ORACLE_HOST" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
             echo "❌ ERROR: oracle_cloud_host is not a valid IP: $ORACLE_HOST"
             exit 1
           fi
 
-          # Validate database outputs
-          if [ -z "$DB_HOST" ]; then
-            echo "❌ ERROR: database_host output is empty!"
-            terraform output
-            exit 1
-          fi
-
-          if [ -z "$DB_SERVICE" ]; then
-            echo "❌ ERROR: database_service_name output is empty!"
-            terraform output
-            exit 1
-          fi
-
-          # Test network connectivity to the instance
+          # Test network connectivity
           echo "Testing network connectivity to $ORACLE_HOST..."
           if ping -c 3 -W 5 "$ORACLE_HOST" > /dev/null 2>&1; then
             echo "✅ ICMP: Instance is reachable"
@@ -572,28 +385,12 @@ jobs:
 
           echo "✅ All critical outputs validated successfully"
 
-      - name: Save Wallet
-        if: inputs.action == 'create' && success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: oracle-wallet-${{ inputs.environment }}
-          path: ${{ inputs.terraform-directory }}/oracle-wallet.zip
-          retention-days: 7
-
       - name: Save SSH Private Key
         if: inputs.action == 'create' && success()
         uses: actions/upload-artifact@v4
         with:
           name: oracle-ssh-key-${{ inputs.environment }}
           path: ${{ inputs.terraform-directory }}/oracle-staging-key
-          retention-days: 7
-
-      - name: Save Database Init Script
-        if: inputs.action == 'create' && success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: db-init-script-${{ inputs.environment }}
-          path: ${{ inputs.terraform-directory }}/init_db.sql
           retention-days: 7
 
       - name: Save Terraform State

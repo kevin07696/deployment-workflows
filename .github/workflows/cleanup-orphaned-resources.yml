@@ -135,13 +135,40 @@ jobs:
           echo "instance_count=$INSTANCE_COUNT" >> $GITHUB_OUTPUT
           echo ""
 
+          # Find orphaned VCNs
+          echo "=== Orphaned VCNs ==="
+          VCN_LIST=$(oci network vcn list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --all | \
+            jq -r --arg pattern "$SEARCH_PATTERN" '.data[]? |
+              select(."display-name" | contains($pattern)) |
+              "\(.id)|\(."display-name")|\(."lifecycle-state")|\(."time-created")"')
+
+          if [ -n "$VCN_LIST" ]; then
+            echo "Found orphaned VCNs:"
+            echo "$VCN_LIST" | while IFS='|' read -r id name state created; do
+              echo "  🌐 $name"
+              echo "     ID: $id"
+              echo "     State: $state"
+              echo "     Created: $created"
+              echo ""
+            done
+            VCN_COUNT=$(echo "$VCN_LIST" | wc -l)
+          else
+            echo "✅ No orphaned VCNs found"
+            VCN_COUNT=0
+          fi
+          echo "vcn_count=$VCN_COUNT" >> $GITHUB_OUTPUT
+          echo ""
+
           # Calculate age of resources
           echo "=== Resource Age Analysis ==="
-          TOTAL_RESOURCES=$((DB_COUNT + INSTANCE_COUNT))
+          TOTAL_RESOURCES=$((DB_COUNT + INSTANCE_COUNT + VCN_COUNT))
           if [ $TOTAL_RESOURCES -gt 0 ]; then
             echo "⚠️  Found $TOTAL_RESOURCES orphaned resource(s)"
             echo "   - $DB_COUNT database(s)"
             echo "   - $INSTANCE_COUNT compute instance(s)"
+            echo "   - $VCN_COUNT VCN(s)"
 
             # Check for resources older than 24 hours
             CUTOFF_DATE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%S)
@@ -223,6 +250,51 @@ jobs:
             echo "✅ Instance termination requests submitted"
           fi
 
+          # Delete orphaned VCNs (requires deleting dependencies first)
+          if [ "${{ steps.find.outputs.vcn_count }}" -gt 0 ]; then
+            echo "🗑️  Deleting orphaned VCNs..."
+            VCN_IDS=$(oci network vcn list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+              --all | \
+              jq -r --arg pattern "$SEARCH_PATTERN" '.data[]? |
+                select(."display-name" | contains($pattern)) | .id')
+
+            for vcn_id in $VCN_IDS; do
+              echo "  Processing VCN: $vcn_id"
+
+              # Delete subnets
+              for subnet in $(oci network subnet list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                oci network subnet delete --subnet-id "$subnet" --force 2>/dev/null || true
+              done
+
+              # Delete internet gateways
+              for igw in $(oci network internet-gateway list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                oci network internet-gateway delete --ig-id "$igw" --force 2>/dev/null || true
+              done
+
+              # Delete NAT gateways
+              for nat in $(oci network nat-gateway list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                oci network nat-gateway delete --nat-gateway-id "$nat" --force 2>/dev/null || true
+              done
+
+              # Clear route tables
+              for rt in $(oci network route-table list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                oci network route-table update --rt-id "$rt" --route-rules '[]' --force 2>/dev/null || true
+              done
+
+              # Delete security lists
+              for sl in $(oci network security-list list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} --vcn-id "$vcn_id" --all 2>/dev/null | jq -r '.data[]?.id' || true); do
+                oci network security-list delete --security-list-id "$sl" --force 2>/dev/null || true
+              done
+
+              sleep 5
+
+              # Delete VCN
+              oci network vcn delete --vcn-id "$vcn_id" --force 2>/dev/null && echo "  ✅ VCN deleted" || echo "  ⚠️  VCN deletion failed"
+            done
+            echo "✅ VCN deletion requests submitted"
+          fi
+
           echo ""
           echo "⏳ Waiting 30 seconds for deletions to process..."
           sleep 30
@@ -278,6 +350,7 @@ jobs:
           echo "Would have deleted:"
           echo "  - ${{ steps.find.outputs.db_count }} database(s)"
           echo "  - ${{ steps.find.outputs.instance_count }} compute instance(s)"
+          echo "  - ${{ steps.find.outputs.vcn_count }} VCN(s)"
           echo ""
           echo "To actually delete these resources, run without dry_run flag"
 
@@ -293,6 +366,7 @@ jobs:
           echo "### Resources Found" >> $GITHUB_STEP_SUMMARY
           echo "- 📊 Databases: ${{ steps.find.outputs.db_count }}" >> $GITHUB_STEP_SUMMARY
           echo "- 💻 Compute Instances: ${{ steps.find.outputs.instance_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌐 VCNs: ${{ steps.find.outputs.vcn_count }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Total:** ${{ steps.find.outputs.total_resources }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 

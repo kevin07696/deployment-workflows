@@ -1,8 +1,8 @@
 #cloud-config
 
 # Oracle Cloud Compute Instance Setup
-# Bootstrap Docker, Oracle Instant Client (for sqlplus), and app setup
-# NOTE: Oracle Instant Client is required for database migrations via sqlplus
+# Bootstrap Docker with PostgreSQL and application services
+# NOTE: Using PostgreSQL container since application uses pgx/v5 driver
 
 # Skip full system upgrade (very slow) - only install essentials
 package_update: false
@@ -12,8 +12,6 @@ packages:
   - ca-certificates
   - curl
   - jq
-  - unzip
-  - libaio1
 
 write_files:
   # Application environment config
@@ -27,13 +25,13 @@ write_files:
       # Environment
       ENVIRONMENT=${environment}
 
-      # Database (PostgreSQL on Oracle - see DB_HOST for connection)
-      DB_HOST=${db_connection_string}
-      DB_PORT=1522
-      DB_USER=${db_user}
+      # Database (PostgreSQL container on localhost)
+      DB_HOST=localhost
+      DB_PORT=5432
+      DB_USER=payment_service
       DB_PASSWORD=${db_password}
-      DB_NAME=paymentdb
-      DB_SSLMODE=require
+      DB_NAME=payment_service
+      DB_SSLMODE=disable
 
       # Server
       PORT=8080
@@ -58,6 +56,7 @@ write_files:
       ==========================================
       App:    /home/ubuntu/payment-service
       Logs:   sudo docker logs payment-server -f
+      DB:     sudo docker logs payment-db -f
       ==========================================
     owner: root:root
     permissions: '0644'
@@ -72,24 +71,6 @@ runcmd:
   - ufw allow 8080/tcp
   - ufw allow 8081/tcp
   - ufw --force enable
-
-  # Install Oracle Instant Client (required for sqlplus and database migrations)
-  # Using version 21.1 Basic Lite + SQL*Plus packages
-  - mkdir -p /opt/oracle
-  - |
-    cd /opt/oracle
-    echo "Downloading Oracle Instant Client..."
-    curl -sSL -o instantclient-basiclite.zip https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basiclite-linux.x64-21.1.0.0.0.zip
-    curl -sSL -o instantclient-sqlplus.zip https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-sqlplus-linux.x64-21.1.0.0.0.zip
-    unzip -q instantclient-basiclite.zip
-    unzip -q instantclient-sqlplus.zip
-    rm -f *.zip
-    echo "/opt/oracle/instantclient_21_1" > /etc/ld.so.conf.d/oracle-instantclient.conf
-    ldconfig
-    echo "export LD_LIBRARY_PATH=/opt/oracle/instantclient_21_1:\$LD_LIBRARY_PATH" >> /etc/profile.d/oracle.sh
-    echo "export PATH=/opt/oracle/instantclient_21_1:\$PATH" >> /etc/profile.d/oracle.sh
-    chmod +x /etc/profile.d/oracle.sh
-    echo "Oracle Instant Client installed successfully"
 
   # Install Docker via snap (fast, pre-packaged)
   - snap install docker
@@ -106,10 +87,39 @@ runcmd:
       sleep 5
     done
 
+  # Create Docker network for service communication
+  - sudo docker network create payment-network 2>/dev/null || true
+
+  # Start PostgreSQL container
+  - |
+    echo "Starting PostgreSQL container..."
+    sudo docker run -d \
+      --name payment-db \
+      --network payment-network \
+      --restart unless-stopped \
+      -e POSTGRES_USER=payment_service \
+      -e POSTGRES_PASSWORD=${db_password} \
+      -e POSTGRES_DB=payment_service \
+      -v /home/ubuntu/payment-service/pgdata:/var/lib/postgresql/data \
+      -p 5432:5432 \
+      postgres:15-alpine
+
+  # Wait for PostgreSQL to be ready
+  - |
+    echo "Waiting for PostgreSQL to be ready..."
+    for i in $(seq 1 30); do
+      if sudo docker exec payment-db pg_isready -U payment_service > /dev/null 2>&1; then
+        echo "✅ PostgreSQL ready"
+        break
+      fi
+      echo "Waiting for PostgreSQL... ($i/30)"
+      sleep 2
+    done
+
   # With snap Docker, use sudo for docker commands (no docker group)
   # OCIR login (non-fatal if fails)
   # NOTE: Using echo | pipe instead of <<< (here-string) for POSIX sh compatibility
   - |
     echo "${ocir_auth_token}" | sudo docker login ${ocir_region}.ocir.io -u "${ocir_username}" --password-stdin || echo "OCIR login failed (non-fatal)"
 
-final_message: "Payment service instance ready! ${environment} environment."
+final_message: "Payment service instance ready! ${environment} environment with PostgreSQL."
