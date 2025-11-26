@@ -39,6 +39,8 @@ on:
         required: true
       EPX_TERMINAL_NBR:
         required: true
+      CRON_SECRET_STAGING:
+        required: true
 
 jobs:
   deploy:
@@ -274,7 +276,7 @@ jobs:
               -e EPX_MAC=${{ secrets.EPX_MAC_STAGING }} \
               -e NORTH_API_URL=https://api.north.com \
               -e NORTH_TIMEOUT=30 \
-              -e CRON_SECRET=staging-cron-secret \
+              -e CRON_SECRET=${{ secrets.CRON_SECRET_STAGING }} \
               -e ENVIRONMENT=staging \
               -e SECRET_MANAGER=mock \
               -e SECRET_CACHE_TTL_MINUTES=5 \
