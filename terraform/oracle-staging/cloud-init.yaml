@@ -85,7 +85,8 @@ runcmd:
 
   # With snap Docker, use sudo for docker commands (no docker group)
   # OCIR login (non-fatal if fails)
+  # NOTE: Using echo | pipe instead of <<< (here-string) for POSIX sh compatibility
   - |
-    sudo docker login ${ocir_region}.ocir.io -u "${ocir_username}" --password-stdin <<< "${ocir_auth_token}" || echo "⚠️ OCIR login failed (non-fatal)"
+    echo "${ocir_auth_token}" | sudo docker login ${ocir_region}.ocir.io -u "${ocir_username}" --password-stdin || echo "OCIR login failed (non-fatal)"
 
 final_message: "Payment service instance ready! ${environment} environment."
