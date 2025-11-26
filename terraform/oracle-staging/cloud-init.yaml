@@ -12,6 +12,7 @@ packages:
   - ca-certificates
   - curl
   - jq
+  - unzip
 
 write_files:
   # Application environment config
