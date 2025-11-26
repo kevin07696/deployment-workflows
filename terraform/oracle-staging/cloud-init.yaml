@@ -83,11 +83,9 @@ runcmd:
       sleep 5
     done
 
-  # Add ubuntu to docker group
-  - usermod -aG docker ubuntu
-
+  # With snap Docker, use sudo for docker commands (no docker group)
   # OCIR login (non-fatal if fails)
   - |
-    echo "${ocir_auth_token}" | docker login ${ocir_region}.ocir.io -u "${ocir_username}" --password-stdin || echo "⚠️ OCIR login failed (non-fatal)"
+    sudo docker login ${ocir_region}.ocir.io -u "${ocir_username}" --password-stdin <<< "${ocir_auth_token}" || echo "⚠️ OCIR login failed (non-fatal)"
 
 final_message: "Payment service instance ready! ${environment} environment."
