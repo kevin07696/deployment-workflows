@@ -1,8 +1,8 @@
 #cloud-config
 
-# Oracle Cloud Compute Instance Setup - SIMPLIFIED
-# Minimal bootstrap - Docker and app setup only
-# Removed: package_upgrade, Oracle Instant Client (not needed - DB access via Docker)
+# Oracle Cloud Compute Instance Setup
+# Bootstrap Docker, Oracle Instant Client (for sqlplus), and app setup
+# NOTE: Oracle Instant Client is required for database migrations via sqlplus
 
 # Skip full system upgrade (very slow) - only install essentials
 package_update: false
@@ -13,6 +13,7 @@ packages:
   - curl
   - jq
   - unzip
+  - libaio1
 
 write_files:
   # Application environment config
@@ -71,6 +72,24 @@ runcmd:
   - ufw allow 8080/tcp
   - ufw allow 8081/tcp
   - ufw --force enable
+
+  # Install Oracle Instant Client (required for sqlplus and database migrations)
+  # Using version 21.1 Basic Lite + SQL*Plus packages
+  - mkdir -p /opt/oracle
+  - |
+    cd /opt/oracle
+    echo "Downloading Oracle Instant Client..."
+    curl -sSL -o instantclient-basiclite.zip https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basiclite-linux.x64-21.1.0.0.0.zip
+    curl -sSL -o instantclient-sqlplus.zip https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-sqlplus-linux.x64-21.1.0.0.0.zip
+    unzip -q instantclient-basiclite.zip
+    unzip -q instantclient-sqlplus.zip
+    rm -f *.zip
+    echo "/opt/oracle/instantclient_21_1" > /etc/ld.so.conf.d/oracle-instantclient.conf
+    ldconfig
+    echo "export LD_LIBRARY_PATH=/opt/oracle/instantclient_21_1:\$LD_LIBRARY_PATH" >> /etc/profile.d/oracle.sh
+    echo "export PATH=/opt/oracle/instantclient_21_1:\$PATH" >> /etc/profile.d/oracle.sh
+    chmod +x /etc/profile.d/oracle.sh
+    echo "Oracle Instant Client installed successfully"
 
   # Install Docker via snap (fast, pre-packaged)
   - snap install docker
