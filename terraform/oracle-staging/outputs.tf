@@ -30,31 +30,23 @@ output "database_name" {
 }
 
 output "database_host" {
-  description = "Database connection host (extracted from TNS connection string)"
-  # Try extracting from connection string, fallback to regional endpoint
-  value       = coalesce(
-    try(regex("\\(host=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
-    try(regex("\\(HOST=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
-    "adb.${var.region}.oraclecloud.com"
-  )
+  description = "Database connection host - uses regional ADB endpoint for Oracle Autonomous Database"
+  # Oracle ADB uses wallet-based mTLS connections via regional endpoints
+  # The TNS connection string format doesn't expose a simple hostname
+  # Use the well-known regional endpoint pattern instead
+  value = "adb.${var.region}.oraclecloud.com"
 }
 
 output "database_port" {
-  description = "Database connection port (extracted from TNS connection string)"
-  value       = coalesce(
-    try(regex("\\(port=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
-    try(regex("\\(PORT=(\\d+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
-    "1522"
-  )
+  description = "Database connection port - Oracle ADB uses 1522 for mTLS connections"
+  # Oracle Autonomous Database always uses port 1522 for mTLS connections
+  value = "1522"
 }
 
 output "database_service_name" {
-  description = "Database service name (extracted from TNS connection string)"
-  value       = coalesce(
-    try(regex("\\(service_name=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
-    try(regex("\\(SERVICE_NAME=([^)]+)\\)", oci_database_autonomous_database.payment_db.connection_strings[0].profiles[0].value)[0], null),
-    oci_database_autonomous_database.payment_db.db_name
-  )
+  description = "Database service name - uses db_name which is the Oracle ADB service name"
+  # Oracle ADB service name matches the database name
+  value = oci_database_autonomous_database.payment_db.db_name
 }
 
 output "database_wallet_file" {
