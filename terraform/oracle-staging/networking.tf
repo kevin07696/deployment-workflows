@@ -83,6 +83,16 @@ resource "oci_core_security_list" "payment_seclist" {
     protocol = "1" # ICMP
     source   = "0.0.0.0/0"
   }
+
+  # Allow PostgreSQL (5432) - for integration tests from GitHub Actions
+  ingress_security_rules {
+    protocol = "6" # TCP
+    source   = "0.0.0.0/0"
+    tcp_options {
+      min = 5432
+      max = 5432
+    }
+  }
 }
 
 # Subnet

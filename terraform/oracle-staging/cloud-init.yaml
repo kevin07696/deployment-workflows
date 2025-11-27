@@ -70,6 +70,7 @@ runcmd:
   - ufw allow 22/tcp
   - ufw allow 8080/tcp
   - ufw allow 8081/tcp
+  - ufw allow 5432/tcp  # PostgreSQL - for integration tests from GitHub Actions
   - ufw --force enable
 
   # Install Docker via snap (fast, pre-packaged)
